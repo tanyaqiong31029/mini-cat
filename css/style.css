@@ -58,6 +58,22 @@ header {
   border-bottom: 1px solid #ecd9a8;
 }
 
+#backupBanner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: #fdf0ee; color: #8c3f32; font-size: 13px; padding: 6px 16px;
+  border-bottom: 1px solid #eccfc9;
+}
+#backupBanner span { flex: 1; }
+
+body.dropping::after {
+  content: '松开以恢复备份（.json）';
+  position: fixed; inset: 0; z-index: 999;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(91, 138, 114, .18); color: var(--celadon-dark);
+  font-size: 22px; font-weight: 700; pointer-events: none;
+  border: 3px dashed var(--celadon);
+}
+
 #stats {
   display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
   padding: 8px 16px; font-size: 13px; color: var(--muted);
@@ -98,6 +114,7 @@ main { display: flex; flex: 1; min-height: 0; }
 .badge {
   font-size: 12px; border-radius: 4px; padding: 1px 7px; font-weight: 600;
 }
+.m-ice   { background: #3d6f8e; color: #fff; }
 .m-exact { background: var(--celadon); color: #fff; }
 .m-near  { background: #7fae94; color: #fff; }
 .m-hi    { background: #d8e7dd; color: var(--celadon-dark); }

@@ -110,8 +110,10 @@
     return Math.round(sim * 100);
   }
 
-  /* Match band labels, following common CAT conventions (MateCat/OmegaT style). */
+  /* Match band labels, following common CAT conventions (MateCat/OmegaT style).
+   * 101 = ICE: exact match whose preceding context also matches (memoQ/Trados convention). */
   function matchBand(score) {
+    if (score >= 101) return { key: 'ice', label: '101% ICE', cls: 'm-ice' };
     if (score >= 100) return { key: 'exact', label: '100%', cls: 'm-exact' };
     if (score >= 95) return { key: 'near', label: score + '%', cls: 'm-near' };
     if (score >= 75) return { key: 'fuzzy-hi', label: score + '%', cls: 'm-hi' };
@@ -158,8 +160,10 @@
   }
 
   /* Rank all TM entries against a source segment; returns [{entry, score}] ≥ minScore.
-   * Optimized: query normalization/bigrams computed once; candidate grams reused. */
-  function findMatches(source, entries, index, minScore, topN) {
+   * Optimized: query normalization/bigrams computed once; candidate grams reused.
+   * prevNorm: normalized source of the preceding segment — exact candidates whose
+   * stored prevNorm matches are upgraded to 101 (ICE, in-context exact). */
+  function findMatches(source, entries, index, minScore, topN, prevNorm) {
     minScore = minScore || 50; topN = topN || 5;
     const q = normalizeCJK(source);
     if (!q) return [];
@@ -169,7 +173,10 @@
     const out = [];
     for (const e of entries) {
       let score;
-      if (e.srcNorm === q) score = 100;
+      if (e.srcNorm === q) {
+        score = 100;
+        if (prevNorm && e.prevNorm && e.prevNorm === prevNorm) score = 101;
+      }
       else {
         if (!candIds.has(e.id)) continue;
         const len = e.srcNorm.length, ql = q.length;

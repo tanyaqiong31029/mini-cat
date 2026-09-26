@@ -21,6 +21,8 @@
 index.html          单页 UI（无框架，原生 DOM 渲染）
 js/core.js          纯函数核心：归一化 / 相似度 / 分段 / 术语匹配 / bigram 倒排索引
 js/db.js            IndexedDB 封装：tm / terms / projects / meta 四个 store
+js/zip.js           极简 ZIP 读取器（central directory + DecompressionStream('deflate-raw')），零依赖
+js/msoffice.js      .xlsx（sharedStrings/inlineStr）与 .docx（段落+表格，命名空间无关解析）提取
 js/io.js            文件格式：TMX 1.4、TBX-Basic、CSV/TSV（BOM+GBK 回退）、JSONL、粘贴对齐、备份
 js/app.js           状态管理、事件、渲染、批量匹配调度
 tests/              Node 单元测试（core+io 纯函数）与规模基准
@@ -72,6 +74,17 @@ termbase/*.tbx|csv              ──导入──▶ 术语库（2026最终译�
 记忆库/术语库                    ──导出──▶ tmx|csv|jsonl|tbx 回流仓库与 Trados/memoQ
 项目统计（匹配率/进度/字数）      ──人工──▶ 翻译实践报告过程数据
 ```
+
+## docx/xlsx 提取要点
+
+- 容器为 ZIP：自实现 central directory 解析，method 8 用浏览器原生 `DecompressionStream('deflate-raw')`（Node 17+ 同样可用，便于测试）；无第三方依赖
+- xlsx：`xl/workbook.xml` + rels 解析工作表路径；单元格支持 `t="s"`（sharedStrings）与 `t="inlineStr"`（openpyxl 默认）两种字符串布局
+- docx：`word/document.xml` 的 body 子元素按 `w:p`/`w:tbl` 分派；OOXML 带命名空间前缀，必须用 `getElementsByTagNameNS('*')` / `localName`，`querySelector` 按限定名匹配会失效
+- 双语 docx 三种结构：表格列配对（表头严格匹配"中文≠英文原文"陷阱 + 内容 CJK/拉丁比例校验兜底）、段落交替、先中后英（最优切分点搜索）
+
+## 端侧 MT 建议
+
+使用 Chrome 138+ 内置 `self.Translator` API（zh→en），模型在本机运行，文本不出设备；特性检测失败即隐藏按钮，不影响其他功能。这是不引入任何云端 MT 的前提下唯一的 MT 路径。
 
 ## 测试
 

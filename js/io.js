@@ -70,20 +70,24 @@
     return '\uFEFF' + rows.map(r => r.map(c => csvCell(c, delim)).join(delim)).join('\r\n');
   }
 
-  /* Header-driven auto-mapping for bilingual CSV.
-   * Returns {header, rows, mapping:{src,tgt,note,id}} */
-  function sniffBilingualTable(text, delim) {
-    const table = parseDelimited(text, delim || 'auto');
-    if (!table.length) return null;
-    const header = table[0].map(h => h.trim());
-    const find = (res) => header.findIndex(h => res.some(r => h.toLowerCase().includes(r)));
-    const mapping = {
+  /* Header-driven auto-mapping for bilingual tables (also used for xlsx/docx rows).
+   * Returns {src,tgt,note,id} column indices (−1 = absent). */
+  function mapBilingualHeader(header) {
+    const norm = header.map(h => String(h || '').trim().toLowerCase());
+    const find = (res) => norm.findIndex(h => res.some(r => h.includes(r)));
+    return {
       src: find(['中文', '原文', 'zh', 'source', 'src']),
       tgt: find(['英文', '译文', '目标', 'en', 'english', 'target', 'tgt', '最终译法', '译法']),
       note: find(['备注', '说明', '定义', '语境', 'note', 'definition', '出处', '决策']),
       id: find(['id', '编号', '术语id'])
     };
-    return { header, rows: table.slice(1), mapping };
+  }
+
+  function sniffBilingualTable(text, delim) {
+    const table = parseDelimited(text, delim || 'auto');
+    if (!table.length) return null;
+    const header = table[0].map(h => h.trim());
+    return { header, rows: table.slice(1), mapping: mapBilingualHeader(header) };
   }
 
   /* ---------- TMX ---------- */
@@ -253,7 +257,7 @@
   }
 
   const IO = {
-    readAsText, parseDelimited, buildDelimited, sniffBilingualTable,
+    readAsText, parseDelimited, buildDelimited, sniffBilingualTable, mapBilingualHeader,
     parseTMX, buildTMX, parseTBX, buildTBX, parseJSONL, jsonlToTMRows, alignPairTexts, download
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = IO;

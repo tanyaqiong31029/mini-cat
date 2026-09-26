@@ -1,7 +1,7 @@
 /* Mini-CAT application: UI wiring, workspace state, matching pipeline. */
 (function () {
   'use strict';
-  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO;
+  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice;
   const $ = sel => document.querySelector(sel);
   const $$ = sel => [...document.querySelectorAll(sel)];
   const esc = Core.escapeHtml;
@@ -76,8 +76,14 @@
     setBusy(true, '正在匹配记忆库…');
     const CHUNK = 25;
     for (let i = 0; i < state.segments.length; i += CHUNK) {
-      const slice = state.segments.slice(i, i + CHUNK);
-      for (const seg of slice) matchSegment(seg);
+      for (let k = i; k < Math.min(i + CHUNK, state.segments.length); k++) {
+        const seg = state.segments[k];
+        const prev = k > 0 ? state.segments[k - 1] : null;
+        // ICE context: preceding segment within the same paragraph
+        const prevNorm = (prev && prev.para != null && seg.para != null && prev.para === seg.para)
+          ? Core.normalizeCJK(prev.src) : '';
+        matchSegment(seg, prevNorm);
+      }
       renderSegments();
       renderStats();
       await new Promise(r => setTimeout(r, 0));
@@ -87,12 +93,12 @@
     saveProjectDebounced();
   }
 
-  function matchSegment(seg) {
-    const hits = Core.findMatches(seg.src, state.tm, state.tmIndex, 50, 5);
+  function matchSegment(seg, prevNorm) {
+    const hits = Core.findMatches(seg.src, state.tm, state.tmIndex, 50, 5, prevNorm);
     seg.matches = hits.map(h => ({ id: h.entry.id, score: h.score, src: h.entry.src, tgt: h.entry.tgt, note: h.entry.note, origin: h.entry.origin }));
     seg.bestScore = hits.length ? hits[0].score : 0;
     if (hits.length && seg.status !== 'translated' && seg.tgt == null) {
-      seg.tgt = hits[0].score >= 100 ? hits[0].entry.tgt : hits[0].entry.tgt;
+      seg.tgt = hits[0].entry.tgt;
       seg.applied = hits[0].score >= 100;
     } else if (seg.tgt == null) seg.tgt = '';
   }
@@ -100,23 +106,27 @@
   /* ---------------- workspace import ---------------- */
 
   async function importSourceText(text, segMode) {
-    const parts = segMode === 'paragraph'
-      ? String(text).split(/\n+/).map(p => p.trim()).filter(Boolean)
-      : Core.segmentText(text, 6);
-    if (!parts.length) { alert('没有可导入的内容。'); return; }
-    // skip duplicates of existing sources
+    const paras = String(text).split(/\n+/).map(p => p.trim()).filter(Boolean);
     const exist = new Set(state.segments.map(s => Core.normalizeCJK(s.src)));
-    let added = 0;
-    for (const p of parts) {
-      const key = Core.normalizeCJK(p);
+    let added = 0, paraBase = state.segments.length ? (state.segments[state.segments.length - 1].para ?? -1) + 1 : 0;
+    const newSegs = [];
+    if (segMode === 'paragraph') {
+      for (const p of paras) newSegs.push({ src: p, para: paraBase });
+    } else {
+      for (let pi = 0; pi < paras.length; pi++) {
+        for (const s of Core.segmentText(paras[pi], 6)) newSegs.push({ src: s, para: paraBase + pi });
+      }
+    }
+    for (const seg of newSegs) {
+      const key = Core.normalizeCJK(seg.src);
       if (!key || exist.has(key)) continue;
       exist.add(key);
-      state.segments.push({ src: p, tgt: null, status: 'untranslated', matches: [], bestScore: 0 });
+      state.segments.push({ src: seg.src, tgt: null, status: 'untranslated', matches: [], bestScore: 0, para: seg.para });
       added++;
     }
     $('#log').prepend(Object.assign(document.createElement('div'), { textContent: `原文导入：新增 ${added} 段（共 ${state.segments.length} 段）。` }));
+    await saveProjectNow();
     await rematchAll();
-    await saveProjectDebounced();
   }
 
   /* ---------------- TM / terms import ---------------- */
@@ -124,18 +134,22 @@
   function rowsToTM(rows, project) {
     const exist = new Set(state.tm.map(e => e.srcNorm + '\u0000' + e.tgt));
     const out = [];
+    let prevNorm = '';
     for (const r of rows) {
       const src = (r.src || '').trim(), tgt = (r.tgt || '').trim();
       if (!src) continue;
       const key = Core.normalizeCJK(src) + '\u0000' + tgt;
-      if (exist.has(key)) continue;
-      exist.add(key);
-      out.push({
-        project, src, tgt,
-        srcNorm: Core.normalizeCJK(src),
-        bigrams: [...Core.bigrams(src)],
-        note: r.note || '', origin: r.origin || '', date: new Date().toISOString().slice(0, 10)
-      });
+      if (!exist.has(key)) {
+        exist.add(key);
+        out.push({
+          project, src, tgt,
+          srcNorm: Core.normalizeCJK(src),
+          bigrams: [...Core.bigrams(src)],
+          note: r.note || '', origin: r.origin || '', date: new Date().toISOString().slice(0, 10),
+          prevNorm: r.prevNorm !== undefined ? r.prevNorm : prevNorm // ICE context; batches without explicit context use previous TU
+        });
+      }
+      prevNorm = Core.normalizeCJK(src); // duplicates still advance context
     }
     return out;
   }
@@ -220,6 +234,7 @@
       const band = Core.matchBand(seg.bestScore || 0);
       if (flt === 'translated' && seg.status !== 'translated') continue;
       if (flt === 'untranslated' && seg.status === 'translated') continue;
+      if (flt === 'ice' && band.key !== 'ice') continue;
       if (flt === 'exact' && band.key !== 'exact') continue;
       if (flt === 'fuzzy' && !(band.key.startsWith('fuzzy') || band.key === 'near')) continue;
       if (flt === 'none' && band.key !== 'none') continue;
@@ -237,7 +252,7 @@
         srcHtml = h;
       } else srcHtml = esc(seg.src);
 
-      const exact = band.key === 'exact';
+      const exact = band.key === 'exact' || band.key === 'ice';
       html.push(`
       <div class="seg ${seg.status === 'translated' ? 'done' : ''} ${exact ? 'auto' : ''}" data-i="${i}">
         <div class="seg-head">
@@ -263,7 +278,7 @@
     const done = state.segments.filter(s => s.status === 'translated').length;
     const zhChars = state.segments.reduce((a, s) => a + Core.cjkCount(s.src), 0);
     const enWords = state.segments.reduce((a, s) => a + (s.tgt ? s.tgt.trim().split(/\s+/).filter(Boolean).length : 0), 0);
-    const dist = { exact: 0, near: 0, 'fuzzy-hi': 0, 'fuzzy-lo': 0, none: 0 };
+    const dist = { ice: 0, exact: 0, near: 0, 'fuzzy-hi': 0, 'fuzzy-lo': 0, none: 0 };
     for (const s of state.segments) dist[Core.matchBand(s.bestScore || 0).key]++;
     $('#stats').innerHTML = `
       <span>段落 <b>${done}/${total}</b></span>
@@ -272,6 +287,7 @@
       <span>记忆库 <b>${state.tm.length}</b></span>
       <span>术语 <b>${state.terms.length}</b></span>
       <span class="chips">
+        <button class="chip ${state.filter === 'ice' ? 'on' : ''}" data-f="ice">101% ${dist.ice}</button>
         <button class="chip ${state.filter === 'exact' ? 'on' : ''}" data-f="exact">100% ${dist.exact}</button>
         <button class="chip ${state.filter === 'near' ? 'on' : ''}" data-f="near">95-99 ${dist.near}</button>
         <button class="chip ${state.filter === 'fuzzy' ? 'on' : ''}" data-f="fuzzy">模糊 ${dist['fuzzy-hi'] + dist['fuzzy-lo']}</button>
@@ -362,7 +378,10 @@
         seg.tgt = (seg.tgt || '').trim();
         if (!seg.tgt) { alert('译文为空。'); return; }
         seg.status = 'translated';
-        await addTmRows([{ src: seg.src, tgt: seg.tgt, note: '译员确认', origin: '工作台' }], '入库');
+        const prev = i > 0 ? state.segments[i - 1] : null;
+        const prevNorm = (prev && prev.para != null && seg.para != null && prev.para === seg.para)
+          ? Core.normalizeCJK(prev.src) : '';
+        await addTmRows([{ src: seg.src, tgt: seg.tgt, note: '译员确认', origin: '工作台', prevNorm }], '入库');
         renderSegments(); renderStats(); saveProjectDebounced();
       } else if (t.classList.contains('undo-seg')) {
         const seg = state.segments[+t.dataset.i];
@@ -412,25 +431,151 @@
     };
     $('#btnBackup').onclick = exportBackup;
     $('#fileRestore').onchange = restoreBackup;
+    $('#btnMT').onclick = applyMt;
+    $('#btnBannerBackup').onclick = exportBackup;
+    $('#btnBannerDismiss').onclick = hideBackupBanner;
+    setupDragDrop();
+    (async () => {
+      // show the MT button whenever the API exists and zh→en is not ruled out;
+      // actual model availability errors surface on click
+      try {
+        if (!('Translator' in self) || !self.Translator || !self.Translator.availability) { $('#btnMT').style.display = 'none'; return; }
+        const a = await self.Translator.availability({ sourceLanguage: 'zh', targetLanguage: 'en' });
+        if (a === 'unavailable') $('#btnMT').style.display = 'none';
+      } catch (e) { $('#btnMT').style.display = 'none'; }
+    })();
+    checkBackupReminder();
 
     /* ---- dialogs ---- */
     // source
     $('#srcSegMode').onchange = e => {};
     $('#btnSourceLoad').onclick = async () => {
       const f = $('#srcFile').files[0];
-      const text = f ? await IO.readAsText(f) : $('#srcPaste').value;
-      if (!text.trim()) { alert('请选择 txt/csv 文件或粘贴文本。'); return; }
+      let text = '';
+      if (f && /\.docx$/i.test(f.name)) {
+        setBusy(true, '正在读取 Word 文档…');
+        try {
+          const buf = await f.arrayBuffer();
+          const { paragraphs } = await Office.docxToBlocks(buf);
+          text = paragraphs.filter(p => p.trim()).join('\n');
+        } catch (err) { setBusy(false); alert('docx 解析失败：' + err.message); return; }
+        setBusy(false);
+      } else {
+        text = f ? await IO.readAsText(f) : $('#srcPaste').value;
+      }
+      if (!text.trim()) { alert('请选择文件或粘贴文本。'); return; }
       $('#dlgSource').close();
       await importSourceText(text, $('#srcSegMode').value);
     };
 
     // TM
-    function prepareTmDialog() { $('#tmPasteSrc').value = ''; $('#tmPasteTgt').value = ''; $('#tmFile').value = ''; $('#tmMappingBox').innerHTML = ''; }
+    function prepareTmDialog() { $('#tmPasteSrc').value = ''; $('#tmPasteTgt').value = ''; $('#tmFile').value = ''; $('#tmMappingBox').innerHTML = ''; delete $('#tmMappingBox').dataset.rows; delete $('#tmMappingBox').dataset.tus; delete $('#tmMappingBox').dataset.pairs; }
+
+    function showTablePreview(header, rows, mapping) {
+      if (mapping.src < 0 || mapping.tgt < 0 || mapping.src === mapping.tgt) {
+        $('#tmMappingBox').innerHTML = '<div class="mapping-note">⚠️ 未识别出中文/译文列，请改用 TMX/JSONL 或粘贴方式。</div>';
+        return false;
+      }
+      $('#tmMappingBox').innerHTML = `<div class="mapping-note">表格：源列=<b>${esc(header[mapping.src])}</b>，译文列=<b>${esc(header[mapping.tgt])}</b>，共 ${rows.length} 行。预览：</div>` +
+        rows.slice(0, 5).map(r => `<div class="mapping-row"><span>${esc(String(r[mapping.src] || '').slice(0, 40))}</span><span>${esc(String(r[mapping.tgt] || '').slice(0, 40))}</span></div>`).join('');
+      $('#tmMappingBox').dataset.rows = JSON.stringify({ header, rows: rows.slice(0, 20000), mapping });
+      return true;
+    }
+
+    async function previewXlsxTm(f) {
+      const sheets = await Office.xlsxToSheets(await f.arrayBuffer());
+      const sheet = sheets.reduce((a, b) => (b.rows.length > a.rows.length ? b : a));
+      const header = (sheet.rows[0] || []).map(h => String(h || '').trim());
+      const rows = sheet.rows.slice(1).filter(r => r.some(c => String(c || '').trim()));
+      const okp = showTablePreview(header, rows, IO.mapBilingualHeader(header));
+      if (okp) $('#tmMappingBox').dataset.note = `xlsx 工作表「${sheet.name}」`;
+      return okp;
+    }
+
+    async function previewDocxTm(f, mode) {
+      const { paragraphs, tables } = await Office.docxToBlocks(await f.arrayBuffer());
+      const usable = tables.filter(t => t.rows.length >= 2 && Math.max(...t.rows.map(r => r.length)) >= 2);
+      // table path (auto prefers tables — they are unambiguous, e.g. 左右对照表)
+      if ((mode === 'auto' || mode === 'table') && usable.length) {
+        const allRows = [];
+        let header = null, mapping = null;
+        for (const t of usable) {
+          let body = t.rows;
+          const first = t.rows[0].map(c => String(c || '').trim().toLowerCase());
+          const looksHeader = first.some(c => /中文|英文|原文|译文|source|target|^id$/.test(c));
+          if (looksHeader) {
+            if (!header) { header = t.rows[0].map(c => String(c || '').trim()); mapping = Office.sniffDocxTable(t.rows); }
+            body = t.rows.slice(1);
+          } else if (!header) {
+            header = t.rows[0].map((_, i2) => '列' + (i2 + 1));
+          }
+          allRows.push(...body);
+        }
+        if (!mapping && header) mapping = Office.sniffDocxTable([header, ...allRows.slice(0, 10)]);
+        if (mapping && allRows.length) {
+          const m = { src: mapping.srcCol, tgt: mapping.tgtCol, note: -1, id: mapping.idCol };
+          const okp = showTablePreview(header.length ? header : allRows[0].map((_, i2) => '列' + (i2 + 1)), allRows, m);
+          if (okp) $('#tmMappingBox').dataset.note = `docx 表格 ×${usable.length}`;
+          return okp;
+        }
+      }
+      // paragraph path
+      const sniffed = Office.sniffDocxParagraphs(paragraphs);
+      if ((mode === 'auto') && sniffed) {
+        $('#tmMappingBox').innerHTML = `<div class="mapping-note">docx 段落（${sniffed.mode === 'alternate' ? '中英交替' : '先中后英'}）：<b>${sniffed.pairs.length}</b> 对${sniffed.mismatch ? `，尾部落单 ${sniffed.mismatch} 段` : ''}。预览：</div>` +
+          sniffed.pairs.slice(0, 5).map(p => `<div class="mapping-row"><span>${esc(p.src.slice(0, 40))}</span><span>${esc(p.tgt.slice(0, 40))}</span></div>`).join('');
+        $('#tmMappingBox').dataset.pairs = JSON.stringify(sniffed.pairs.slice(0, 20000));
+        return true;
+      }
+      if (mode === 'alternate' || mode === 'zh_then_en') {
+        const ps = paragraphs.map(p => p.trim()).filter(Boolean);
+        let pairs;
+        if (mode === 'alternate') {
+          pairs = [];
+          for (let i = 0; i + 1 < ps.length; i += 2) pairs.push({ src: ps[i], tgt: ps[i + 1] });
+        } else {
+          const flags = ps.map(Office.isCJK);
+          let best = 0, bestScore = -1;
+          for (let i = 0; i <= ps.length; i++) {
+            let zhBefore = 0, enAfter = 0;
+            for (let j = 0; j < i; j++) if (flags[j]) zhBefore++;
+            for (let j = i; j < ps.length; j++) if (!flags[j]) enAfter++;
+            if (zhBefore + enAfter > bestScore) { bestScore = zhBefore + enAfter; best = i; }
+          }
+          const zh = ps.slice(0, best), en = ps.slice(best);
+          const n = Math.min(zh.length, en.length);
+          pairs = zh.slice(0, n).map((s, k) => ({ src: s, tgt: en[k] }));
+        }
+        $('#tmMappingBox').innerHTML = `<div class="mapping-note">docx 段落（手动模式）：<b>${pairs.length}</b> 对。预览：</div>` +
+          pairs.slice(0, 5).map(p => `<div class="mapping-row"><span>${esc(p.src.slice(0, 40))}</span><span>${esc(p.tgt.slice(0, 40))}</span></div>`).join('');
+        $('#tmMappingBox').dataset.pairs = JSON.stringify(pairs.slice(0, 20000));
+        return true;
+      }
+      $('#tmMappingBox').innerHTML = '<div class="mapping-note">⚠️ 未能自动识别双语结构。请在「docx 结构」中选择模式，或使用粘贴方式。</div>';
+      return false;
+    }
 
     $('#tmFile').onchange = async () => {
       const f = $('#tmFile').files[0]; if (!f) return;
-      const text = await IO.readAsText(f);
-      showTmPreview(text, f.name);
+      $('#tmMappingBox').innerHTML = '<div class="mapping-note">解析中…</div>';
+      delete $('#tmMappingBox').dataset.rows;
+      delete $('#tmMappingBox').dataset.tus;
+      delete $('#tmMappingBox').dataset.pairs;
+      try {
+        const mode = $('#tmDocxMode') ? $('#tmDocxMode').value : 'auto';
+        if (/\.docx$/i.test(f.name)) { await previewDocxTm(f, mode); return; }
+        if (/\.xlsx$/i.test(f.name)) { await previewXlsxTm(f); return; }
+        const text = await IO.readAsText(f);
+        if (/<tmx[\s>]/i.test(text.slice(0, 400))) {
+          const { tus } = IO.parseTMX(text);
+          $('#tmMappingBox').innerHTML = `<div class="mapping-note">TMX：${tus.length} 个翻译单元，预览前 5 条：</div>` +
+            tus.slice(0, 5).map(tu => `<div class="mapping-row"><span>${esc(tu.src.slice(0, 40))}</span><span>${esc(tu.tgt.slice(0, 40))}</span></div>`).join('');
+          $('#tmMappingBox').dataset.tus = JSON.stringify(tus.slice(0, 20000));
+        } else {
+          const { header, rows, mapping } = IO.sniffBilingualTable(text);
+          showTablePreview(header, rows, mapping);
+        }
+      } catch (err) { $('#tmMappingBox').innerHTML = `<div class="mapping-note">解析失败：${esc(err.message)}</div>`; }
     };
     $('#btnTmPreviewPaste').onclick = () => {
       const s = $('#tmPasteSrc').value, t = $('#tmPasteTgt').value;
@@ -442,23 +587,6 @@
         <div class="mapping-rows">${pairs.slice(0, 8).map(p => `<div class="mapping-row"><span>${esc(p.src.slice(0, 40))}</span><span>${esc(p.tgt.slice(0, 40))}</span></div>`).join('')}</div>`;
       $('#tmMappingBox').dataset.pairs = JSON.stringify(pairs.slice(0, 5000));
     };
-
-    function showTmPreview(text, name) {
-      try {
-        if (/\.tmx$/i.test(name) || /<tmx[\s>]/i.test(text)) {
-          const { tus } = IO.parseTMX(text);
-          $('#tmMappingBox').innerHTML = `<div class="mapping-note">TMX：${tus.length} 个翻译单元，预览前 5 条：</div>` +
-            tus.slice(0, 5).map(tu => `<div class="mapping-row"><span>${esc(tu.src.slice(0, 40))}</span><span>${esc(tu.tgt.slice(0, 40))}</span></div>`).join('');
-          $('#tmMappingBox').dataset.tus = JSON.stringify(tus.slice(0, 20000));
-        } else {
-          const { header, rows, mapping } = IO.sniffBilingualTable(text);
-          if (mapping.src < 0 || mapping.tgt < 0) { $('#tmMappingBox').innerHTML = '<div class="mapping-note">⚠️ 未识别出中文/译文列，请改用 TMX/JSONL 或粘贴方式。</div>'; return; }
-          $('#tmMappingBox').innerHTML = `<div class="mapping-note">表格：源列=<b>${esc(header[mapping.src])}</b>，译文列=<b>${esc(header[mapping.tgt])}</b>，共 ${rows.length} 行。预览：</div>` +
-            rows.slice(0, 5).map(r => `<div class="mapping-row"><span>${esc((r[mapping.src] || '').slice(0, 40))}</span><span>${esc((r[mapping.tgt] || '').slice(0, 40))}</span></div>`).join('');
-          $('#tmMappingBox').dataset.rows = JSON.stringify({ header, rows: rows.slice(0, 20000), mapping });
-        }
-      } catch (err) { $('#tmMappingBox').innerHTML = `<div class="mapping-note">解析失败：${esc(err.message)}</div>`; }
-    }
 
     $('#btnTmCommit').onclick = async () => {
       const box = $('#tmMappingBox');
@@ -473,30 +601,49 @@
       } else { alert('请先选择文件或生成粘贴对齐预览。'); return; }
       const n = await addTmRows(rows, '记忆库导入');
       $('#dlgTM').close();
+      await saveProjectNow();
       await rematchAll();
     };
 
     // terms
     $('#termFile').onchange = async () => {
       const f = $('#termFile').files[0]; if (!f) return;
-      const text = await IO.readAsText(f);
+      $('#termMappingBox').innerHTML = '<div class="mapping-note">解析中…</div>';
       try {
         let rows;
-        if (/\.tbx$/i.test(f.name) || /<martif/i.test(text)) {
-          rows = IO.parseTBX(text);
-        } else {
-          const { header, rows: tableRows, mapping } = IO.sniffBilingualTable(text);
+        if (/\.xlsx$/i.test(f.name)) {
+          const sheets = await Office.xlsxToSheets(await f.arrayBuffer());
+          const sheet = sheets.reduce((a, b) => (b.rows.length > a.rows.length ? b : a));
+          const header = (sheet.rows[0] || []).map(h => String(h || '').trim());
+          const mapping = IO.mapBilingualHeader(header);
           refineTermMapping(header, mapping);
-          if (mapping.src < 0) { alert('未识别出中文术语列。'); return; }
-          // porcelain_termbase.csv convention: fall back to 2025译法 when 2026最终译法 is empty
+          if (mapping.src < 0) { alert('未识别出中文术语列（表头：' + header.join(' / ') + '）。'); return; }
           const fallbackIdx = header.findIndex(h => h.includes('2025'));
-          rows = tableRows.map(r => ({
-            zh: r[mapping.src], en: (mapping.tgt >= 0 ? (r[mapping.tgt] || '').trim() : '') || (fallbackIdx >= 0 ? (r[fallbackIdx] || '').trim() : ''),
-            note: [mapping.note >= 0 ? r[mapping.note] : '', mapping.id >= 0 ? '' : ''].filter(Boolean).join('｜')
-          }));
+          rows = sheet.rows.slice(1)
+            .filter(r => r.some(c => String(c || '').trim()))
+            .map(r => ({
+              zh: String(r[mapping.src] || '').trim(),
+              en: (mapping.tgt >= 0 ? String(r[mapping.tgt] || '').trim() : '') || (fallbackIdx >= 0 ? String(r[fallbackIdx] || '').trim() : ''),
+              note: mapping.note >= 0 ? String(r[mapping.note] || '').trim() : ''
+            }));
+        } else {
+          const text = await IO.readAsText(f);
+          if (/<martif/i.test(text.slice(0, 400))) {
+            rows = IO.parseTBX(text);
+          } else {
+            const { header, rows: tableRows, mapping } = IO.sniffBilingualTable(text);
+            refineTermMapping(header, mapping);
+            if (mapping.src < 0) { alert('未识别出中文术语列。'); return; }
+            const fallbackIdx = header.findIndex(h => h.includes('2025'));
+            rows = tableRows.map(r => ({
+              zh: r[mapping.src], en: (mapping.tgt >= 0 ? (r[mapping.tgt] || '').trim() : '') || (fallbackIdx >= 0 ? (r[fallbackIdx] || '').trim() : ''),
+              note: [mapping.note >= 0 ? r[mapping.note] : '', mapping.id >= 0 ? '' : ''].filter(Boolean).join('｜')
+            }));
+          }
         }
+        rows = rows.filter(t => String(t.zh || '').trim());
         $('#termMappingBox').innerHTML = `<div class="mapping-note">解析到 <b>${rows.length}</b> 条术语，预览：</div>` +
-          rows.slice(0, 6).map(t => `<div class="mapping-row"><span>${esc(t.zh.slice(0, 24))}</span><span>${esc((t.en || '').slice(0, 40))}</span></div>`).join('');
+          rows.slice(0, 6).map(t => `<div class="mapping-row"><span>${esc(String(t.zh || '').slice(0, 24))}</span><span>${esc(String(t.en || '').slice(0, 40))}</span></div>`).join('');
         $('#termMappingBox').dataset.rows = JSON.stringify(rows.slice(0, 20000));
       } catch (err) { $('#termMappingBox').innerHTML = `<div class="mapping-note">解析失败：${esc(err.message)}</div>`; }
     };
@@ -542,21 +689,87 @@
     async function exportBackup() {
       const all = { version: 1, exported: new Date().toISOString(), projects: await DB.Projects.all(), tm: await DB.TM.all(), terms: await DB.Terms.all() };
       IO.download(`mini-cat备份_${today()}.json`, JSON.stringify(all, null, 1), 'application/json');
+      await DB.Meta.set('lastBackupAt', Date.now());
+      hideBackupBanner();
+    }
+    async function restoreFromJsonText(text) {
+      const data = JSON.parse(text);
+      if (!data.tm || !data.terms) throw new Error('不是 Mini-CAT 备份文件');
+      if (!confirm(`恢复备份：记忆 ${data.tm.length} 条、术语 ${data.terms.length} 条、项目 ${(data.projects || []).length} 个。\n将与现有数据合并（重复自动跳过）。继续？`)) return;
+      await DB.TM.addMany(data.tm);
+      await DB.Terms.addMany(data.terms);
+      for (const p of data.projects || []) await DB.Projects.put(p);
+      state.projects = (await DB.Projects.all()).map(p => p.name);
+      await refreshAll();
+      await rematchAll();
+      log(`备份恢复完成：记忆 ${data.tm.length}、术语 ${data.terms.length}。`);
     }
     async function restoreBackup(e) {
       const f = e.target.files[0]; if (!f) return;
-      const text = await IO.readAsText(f);
+      try { await restoreFromJsonText(await IO.readAsText(f)); }
+      catch (err) { alert('恢复失败：' + err.message); }
+    }
+
+    /* ---- MT suggestions: Chrome built-in on-device Translator API (no network egress of user data;
+     * feature-detected, the button stays hidden where unsupported) ---- */
+    let _translator = null;
+    async function ensureTranslator() {
+      if (_translator !== null) return _translator;
       try {
-        const data = JSON.parse(text);
-        if (!data.tm || !data.terms) throw new Error('不是 Mini-CAT 备份文件');
-        if (!confirm(`恢复备份：记忆 ${data.tm.length} 条、术语 ${data.terms.length} 条、项目 ${data.projects.length} 个。\n将与现有数据合并（重复自动跳过）。继续？`)) return;
-        await DB.TM.addMany(data.tm);
-        await DB.Terms.addMany(data.terms);
-        for (const p of data.projects) await DB.Projects.put(p);
-        state.projects = (await DB.Projects.all()).map(p => p.name);
-        await refreshAll();
-        log(`备份恢复完成：记忆 ${data.tm.length}、术语 ${data.terms.length}。`);
-      } catch (err) { alert('恢复失败：' + err.message); }
+        if (!('Translator' in self) || !self.Translator || !self.Translator.create) { _translator = false; return false; }
+        const avail = await self.Translator.availability({ sourceLanguage: 'zh', targetLanguage: 'en' });
+        if (avail === 'unavailable') { _translator = false; return false; }
+        _translator = await self.Translator.create({ sourceLanguage: 'zh', targetLanguage: 'en' });
+        return _translator;
+      } catch (err) { _translator = false; return false; }
+    }
+    async function applyMt() {
+      const tr = await ensureTranslator();
+      if (!tr) { alert('当前浏览器不支持端侧翻译 API（需要 Chrome 138+ 且语言包可用）。'); return; }
+      const targets = state.segments.filter(s => s.status !== 'translated' && !(s.tgt || '').trim());
+      if (!targets.length) { log('没有需要 MT 建议的空段。'); return; }
+      setBusy(true, `端侧生成 MT 建议… 0/${targets.length}`);
+      let done = 0;
+      for (const seg of targets) {
+        try { seg.tgt = await tr.translate(seg.src); seg.mt = true; } catch (err) { /* skip */ }
+        done++;
+        if (done % 5 === 0 || done === targets.length) {
+          setBusy(true, `端侧生成 MT 建议… ${done}/${targets.length}`);
+          renderSegments(); renderStats();
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      setBusy(false);
+      log(`MT 建议：已填入 ${done} 段（可逐段修改后确认入库）。`);
+      saveProjectDebounced();
+    }
+
+    /* ---- backup reminder ---- */
+    async function checkBackupReminder() {
+      const n = state.tm.length + state.terms.length;
+      if (n < 10) return;
+      const last = await DB.Meta.get('lastBackupAt', 0);
+      if (Date.now() - last < 7 * 864e5) return;
+      const banner = $('#backupBanner');
+      if (banner) banner.style.display = '';
+    }
+    function hideBackupBanner() { const b = $('#backupBanner'); if (b) b.style.display = 'none'; }
+
+    /* ---- drag & drop restore ---- */
+    function setupDragDrop() {
+      document.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dropping'); });
+      document.addEventListener('dragleave', e => { if (e.relatedTarget === null) document.body.classList.remove('dropping'); });
+      document.addEventListener('drop', async e => {
+        e.preventDefault();
+        document.body.classList.remove('dropping');
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!f) return;
+        if (/\.json$/i.test(f.name)) {
+          try { await restoreFromJsonText(await IO.readAsText(f)); } catch (err) { alert('恢复失败：' + err.message); }
+        } else {
+          log('拖拽仅支持恢复备份 .json 文件；请用「导入」按钮导入记忆库/术语库/原文。');
+        }
+      });
     }
 
     function today() { return new Date().toISOString().slice(0, 10); }

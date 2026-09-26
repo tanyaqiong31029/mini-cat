@@ -23,6 +23,7 @@
   <button id="btnImportTerms" class="btn">导入术语库</button>
   <button id="btnExport" class="btn">导出 ▾</button>
   <button id="btnRematch" class="btn small">重新匹配</button>
+  <button id="btnMT" class="btn small" style="display:none" title="Chrome 内置端侧翻译，不上传文本">MT 建议</button>
   <button id="btnBackup" class="btn small">备份</button>
   <label class="btn small filelabel">恢复<input type="file" id="fileRestore" accept=".json"></label>
   <span class="spacer"></span>
@@ -30,6 +31,12 @@
 </nav>
 
 <div id="busyBar" style="display:none"><span id="busyMsg">处理中…</span></div>
+
+<div id="backupBanner" style="display:none">
+  <span>⏰ 距上次备份已超过 7 天。清除浏览器数据会丢失记忆库，建议先备份。</span>
+  <button id="btnBannerBackup" class="btn small primary">立即备份</button>
+  <button id="btnBannerDismiss" class="btn small">知道了</button>
+</div>
 
 <section id="stats"></section>
 
@@ -68,8 +75,8 @@
 
 <dialog id="dlgSource">
   <form method="dialog" class="dlg-form"><h3>导入原文</h3>
-    <label>方式一：选择 txt / csv / jsonl 文件
-      <input type="file" id="srcFile" accept=".txt,.csv,.jsonl,.tsv,text/plain">
+    <label>方式一：选择 docx / txt / csv 文件
+      <input type="file" id="srcFile" accept=".docx,.txt,.csv,.jsonl,.tsv,text/plain">
     </label>
     <label>方式二：直接粘贴（从 Word 复制即可）
       <textarea id="srcPaste" rows="8" placeholder="粘贴中文原文，支持多段落…"></textarea>
@@ -90,8 +97,16 @@
 
 <dialog id="dlgTM">
   <form method="dialog" class="dlg-form"><h3>导入记忆库</h3>
-    <label>方式一：文件（TMX 1.4 / CSV / TSV / JSONL）
-      <input type="file" id="tmFile" accept=".tmx,.csv,.tsv,.jsonl,.txt">
+    <label>方式一：文件（TMX 1.4 / docx 对照表 / xlsx 双语表 / CSV / TSV / JSONL）
+      <input type="file" id="tmFile" accept=".tmx,.docx,.xlsx,.csv,.tsv,.jsonl,.txt">
+    </label>
+    <label>docx 双语结构（导入 docx 时生效）
+      <select id="tmDocxMode">
+        <option value="auto">自动检测（优先表格，其次段落结构）</option>
+        <option value="table">表格列配对（左右对照表）</option>
+        <option value="alternate">段落交替（一段中文一段英文）</option>
+        <option value="zh_then_en">先中后英（中文段在前，译文段在后）</option>
+      </select>
     </label>
     <fieldset><legend>方式二：粘贴双语对照（两栏各一栏，按段落自动对齐）</legend>
       <div class="two-col">
@@ -111,8 +126,8 @@
 
 <dialog id="dlgTerms">
   <form method="dialog" class="dlg-form"><h3>导入术语库</h3>
-    <label>选择文件（TBX-Basic / CSV / TSV）
-      <input type="file" id="termFile" accept=".tbx,.csv,.tsv,.txt">
+    <label>选择文件（xlsx / TBX-Basic / CSV / TSV）
+      <input type="file" id="termFile" accept=".xlsx,.tbx,.csv,.tsv,.txt">
     </label>
     <div id="termMappingBox" class="mapping-box"></div>
     <p class="hint">已适配 porcelain_termbase.csv 列结构：自动取「中文术语」「2026最终译法」（缺省用 2025 英文译法）与「语境/定义」。</p>
@@ -139,9 +154,11 @@
   </form>
 </dialog>
 
-<script src="js/core.js?v=3"></script>
-<script src="js/db.js?v=3"></script>
-<script src="js/io.js?v=3"></script>
-<script src="js/app.js?v=3"></script>
+<script src="js/core.js?v=1.1"></script>
+<script src="js/db.js?v=1.1"></script>
+<script src="js/zip.js?v=1.1"></script>
+<script src="js/msoffice.js?v=1.1"></script>
+<script src="js/io.js?v=1.1"></script>
+<script src="js/app.js?v=1.1"></script>
 </body>
 </html>
