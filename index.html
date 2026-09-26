@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini-CAT · 轻量翻译记忆工作台</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>瓷</text></svg>">
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="logo">瓷</span> Mini-CAT <small>轻量翻译记忆工作台</small><span id="projectTitle" class="proj-title"></span></div>
+  <div class="proj">
+    <select id="projSelect" title="当前项目"></select>
+    <button id="projNew" class="btn small">＋新项目</button>
+  </div>
+</header>
+
+<nav class="toolbar">
+  <button id="btnImportSource" class="btn primary">① 导入原文</button>
+  <button id="btnImportTM" class="btn">导入记忆库</button>
+  <button id="btnImportTerms" class="btn">导入术语库</button>
+  <button id="btnExport" class="btn">导出 ▾</button>
+  <button id="btnRematch" class="btn small">重新匹配</button>
+  <button id="btnBackup" class="btn small">备份</button>
+  <label class="btn small filelabel">恢复<input type="file" id="fileRestore" accept=".json"></label>
+  <span class="spacer"></span>
+  <button id="btnWipe" class="btn small danger">清空工作区</button>
+</nav>
+
+<div id="busyBar" style="display:none"><span id="busyMsg">处理中…</span></div>
+
+<section id="stats"></section>
+
+<main>
+  <section id="segments" aria-label="句段列表"></section>
+
+  <aside id="sidebar">
+    <div class="side-tabs">
+      <button class="side-tab on" data-tab="match">记忆匹配</button>
+      <button class="side-tab" data-tab="terms">术语库</button>
+      <button class="side-tab" data-tab="concord">语料检索</button>
+    </div>
+
+    <div class="side-pane" data-pane="match">
+      <div class="pane-head"><span id="matchSegIdx">段落 –</span></div>
+      <div id="matchList" class="pane-body"><div class="empty">点击句段上的「候选」查看记忆库匹配。</div></div>
+    </div>
+
+    <div class="side-pane" data-pane="terms" style="display:none">
+      <div class="pane-head">
+        <input id="termSearch" type="search" placeholder="搜索术语…">
+      </div>
+      <div id="termList" class="pane-body"></div>
+    </div>
+
+    <div class="side-pane" data-pane="concord" style="display:none">
+      <div class="pane-head"><input id="concordInput" type="search" placeholder="在记忆库中检索（中英皆可）…"></div>
+      <div id="concordList" class="pane-body"></div>
+    </div>
+  </aside>
+</main>
+
+<footer><div id="log"></div></footer>
+
+<!-- ============ dialogs ============ -->
+
+<dialog id="dlgSource">
+  <form method="dialog" class="dlg-form"><h3>导入原文</h3>
+    <label>方式一：选择 txt / csv / jsonl 文件
+      <input type="file" id="srcFile" accept=".txt,.csv,.jsonl,.tsv,text/plain">
+    </label>
+    <label>方式二：直接粘贴（从 Word 复制即可）
+      <textarea id="srcPaste" rows="8" placeholder="粘贴中文原文，支持多段落…"></textarea>
+    </label>
+    <label>切分方式
+      <select id="srcSegMode">
+        <option value="sentence">按句子切分（推荐，中文句号等）</option>
+        <option value="paragraph">按段落切分（整段为一句）</option>
+      </select>
+    </label>
+    <p class="hint">导入后自动与记忆库匹配：100% 精确匹配会直接填入译文。</p>
+    <div class="dlg-actions">
+      <button class="btn" value="cancel" formnovalidate>取消</button>
+      <button id="btnSourceLoad" class="btn primary" type="button">导入并匹配</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgTM">
+  <form method="dialog" class="dlg-form"><h3>导入记忆库</h3>
+    <label>方式一：文件（TMX 1.4 / CSV / TSV / JSONL）
+      <input type="file" id="tmFile" accept=".tmx,.csv,.tsv,.jsonl,.txt">
+    </label>
+    <fieldset><legend>方式二：粘贴双语对照（两栏各一栏，按段落自动对齐）</legend>
+      <div class="two-col">
+        <textarea id="tmPasteSrc" rows="6" placeholder="中文原文（一段一行）"></textarea>
+        <textarea id="tmPasteTgt" rows="6" placeholder="英文译文（一段一行）"></textarea>
+      </div>
+      <button id="btnTmPreviewPaste" class="btn small" type="button">预览对齐</button>
+    </fieldset>
+    <div id="tmMappingBox" class="mapping-box"></div>
+    <p class="hint">支持的 CSV：porcelain-china-corpus 平行语料 CSV、双语对照表；自动识别中文/译文列。重复句对自动跳过。</p>
+    <div class="dlg-actions">
+      <button class="btn" value="cancel">取消</button>
+      <button id="btnTmCommit" class="btn primary" type="button">导入记忆库</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgTerms">
+  <form method="dialog" class="dlg-form"><h3>导入术语库</h3>
+    <label>选择文件（TBX-Basic / CSV / TSV）
+      <input type="file" id="termFile" accept=".tbx,.csv,.tsv,.txt">
+    </label>
+    <div id="termMappingBox" class="mapping-box"></div>
+    <p class="hint">已适配 porcelain_termbase.csv 列结构：自动取「中文术语」「2026最终译法」（缺省用 2025 英文译法）与「语境/定义」。</p>
+    <div class="dlg-actions">
+      <button class="btn" value="cancel">取消</button>
+      <button id="btnTermCommit" class="btn primary" type="button">导入术语库</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgExport">
+  <form method="dialog" class="dlg-form"><h3>导出</h3>
+    <div class="export-grid">
+      <button id="btnExpTarget" class="btn" type="button">译文纯文本 (txt)</button>
+      <button id="btnExpBilingual" class="btn" type="button">双语对照表 (html)</button>
+      <button id="btnExpTMX" class="btn" type="button">记忆库 (tmx)</button>
+      <button id="btnExpTmCsv" class="btn" type="button">记忆库 (csv)</button>
+      <button id="btnExpJsonl" class="btn" type="button">平行语料 (jsonl)</button>
+      <button id="btnExpTbxBasic" class="btn" type="button">术语库 (tbx)</button>
+      <button id="btnExpTermCsv" class="btn" type="button">术语库 (csv)</button>
+    </div>
+    <p class="hint">导出的 TMX / TBX 可直接回流 porcelain-china-corpus 或导入 Trados / memoQ。</p>
+    <div class="dlg-actions"><button class="btn" value="cancel">关闭</button></div>
+  </form>
+</dialog>
+
+<script src="js/core.js?v=3"></script>
+<script src="js/db.js?v=3"></script>
+<script src="js/io.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+</body>
+</html>

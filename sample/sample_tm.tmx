@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tmx version="1.4">
+<header creationtool="mini-cat-sample" creationtoolversion="1.0.0" segtype="sentence" o-tmf="plain text" adminlang="zh-CN" srclang="zh-CN" datatype="plaintext" creationdate="20260926T000000Z">
+<prop type="x-project">示例项目</prop>
+</header>
+<body>
+<tu tuid="S0001">
+<tuv xml:lang="zh-CN"><seg>青花瓷是中国陶瓷史上最具代表性的品种之一。</seg></tuv>
+<tuv xml:lang="en-US"><seg>Blue-and-white porcelain is one of the most representative wares in the history of Chinese ceramics.</seg></tuv>
+</tu>
+<tu tuid="S0002">
+<tuv xml:lang="zh-CN"><seg>景德镇自元代起成为全国的制瓷中心。</seg></tuv>
+<tuv xml:lang="en-US"><seg>Jingdezhen became the national centre of porcelain production from the Yuan dynasty onwards.</seg></tuv>
+</tu>
+<tu tuid="S0003">
+<tuv xml:lang="zh-CN"><seg>窑工通过控制窑温与气氛来决定釉色。</seg></tuv>
+<tuv xml:lang="en-US"><seg>Potters determined the glaze colour by controlling kiln temperature and atmosphere.</seg></tuv>
+</tu>
+<tu tuid="S0004">
+<tuv xml:lang="zh-CN"><seg>考古发掘为研究瓷器的生产流程提供了实物证据。</seg></tuv>
+<tuv xml:lang="en-US"><seg>Archaeological excavations provide material evidence for studying porcelain production processes.</seg></tuv>
+</tu>
+</body>
+</tmx>
