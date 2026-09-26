@@ -23,6 +23,7 @@ js/core.js          纯函数核心：归一化 / 相似度 / 分段 / 术语匹
 js/db.js            IndexedDB 封装：tm / terms / projects / meta 四个 store
 js/zip.js           极简 ZIP 读取器（central directory + DecompressionStream('deflate-raw')），零依赖
 js/msoffice.js      .xlsx（sharedStrings/inlineStr）与 .docx（段落+表格，命名空间无关解析）提取
+js/officewrite.js   .docx/.xlsx 生成器：ZIP store 容器（CRC32）+ 最小 OOXML（无边框表格补 tblBorders；xlsx inlineStr/数字单元格）
 js/io.js            文件格式：TMX 1.4、TBX-Basic、CSV/TSV（BOM+GBK 回退）、JSONL、粘贴对齐、备份
 js/app.js           状态管理、事件、渲染、批量匹配调度
 tests/              Node 单元测试（core+io 纯函数）与规模基准
@@ -81,6 +82,18 @@ termbase/*.tbx|csv              ──导入──▶ 术语库（2026最终译�
 - xlsx：`xl/workbook.xml` + rels 解析工作表路径；单元格支持 `t="s"`（sharedStrings）与 `t="inlineStr"`（openpyxl 默认）两种字符串布局
 - docx：`word/document.xml` 的 body 子元素按 `w:p`/`w:tbl` 分派；OOXML 带命名空间前缀，必须用 `getElementsByTagNameNS('*')` / `localName`，`querySelector` 按限定名匹配会失效
 - 双语 docx 三种结构：表格列配对（表头严格匹配"中文≠英文原文"陷阱 + 内容 CJK/拉丁比例校验兜底）、段落交替、先中后英（最优切分点搜索）
+
+## 交付导出
+
+导出对话框分「译文交付」与「翻译数据」两组，交付类支持范围选择（仅已确认段落 / 全部段落，未译留空）：
+
+| 版式 | 格式 | 说明 |
+|---|---|---|
+| 纯译文 | docx / txt | 按 `seg.para` 将英文句连回原文段落结构（空格连接），标题+正文 |
+| 中英对照·段落式 | docx | 逐段"中文 + 斜体灰色英文"交替，适合审校排版 |
+| 句句对照表格 | docx / xlsx / csv | 「序号｜中文｜英文」三列表格（docx 带 tblBorders 网格线），与 Evolis 类交付件、平行语料构建同构 |
+
+docx/xlsx 生成走 ZIP store（无压缩）+ 标准 CRC32，最小 OOXML 部件集（Content Types / rels / document.xml·workbook.xml），Word 与 Excel 直接打开；与 msoffice.js 读取器构成 round-trip 测试闭环。
 
 ## 端侧 MT 建议
 

@@ -1,7 +1,7 @@
 /* Mini-CAT application: UI wiring, workspace state, matching pipeline. */
 (function () {
   'use strict';
-  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice;
+  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice, Write = window.MiniCatWrite;
   const $ = sel => document.querySelector(sel);
   const $$ = sel => [...document.querySelectorAll(sel)];
   const esc = Core.escapeHtml;
@@ -655,13 +655,71 @@
     };
 
     // export
-    $('#btnExpTarget').onclick = () => {
-      const txt = state.segments.filter(s => s.status === 'translated').map(s => s.tgt).join('\n\n');
-      IO.download(`译文_${state.project}_${today()}.txt`, txt || '(无已译段落)', 'text/plain;charset=utf-8');
+    /* 文档交付：范围可选；纯译文按 seg.para 重建段落 */
+    function exportSegs() {
+      return $('#expRange').value === 'all'
+        ? state.segments.slice()
+        : state.segments.filter(s => s.status === 'translated');
+    }
+    function paragraphsFromSegs(segs, zhSide) {
+      // rebuild paragraphs: consecutive segments of the same para joined (EN with spaces)
+      const out = [];
+      let cur = null;
+      for (const s of segs) {
+        const t = zhSide ? (s.src || '') : (s.tgt || '');
+        if (cur === null || s.para == null || s.para !== cur.para) {
+          cur = { para: s.para, parts: [] };
+          out.push(cur);
+        }
+        cur.parts.push(t.trim());
+      }
+      return out.map(p => ({ para: p.para, text: p.parts.filter(Boolean).join(zhSide ? '' : ' ') }));
+    }
+    function docxBlocksTitle(sub) {
+      return [{ type: 'h1', text: state.project }, { type: 'p', text: sub, italic: true, gray: true }];
+    }
+    $('#btnDocPure').onclick = () => {
+      const paras = paragraphsFromSegs(exportSegs(), false);
+      const blocks = docxBlocksTitle(`纯译文 · ${today()}`)
+        .concat(paras.map(p => ({ type: 'p', text: p.text || '（待译）' })));
+      IO.download(`纯译文_${state.project}_${today()}.docx`, Write.buildDocx(blocks), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    };
+    $('#btnDocPureTxt').onclick = () => {
+      const paras = paragraphsFromSegs(exportSegs(), false);
+      const txt = paras.map(p => p.text || '（待译）').join('\n\n');
+      IO.download(`纯译文_${state.project}_${today()}.txt`, txt || '(无已译段落)', 'text/plain;charset=utf-8');
+    };
+    $('#btnBiParaDocx').onclick = () => {
+      const segs = exportSegs();
+      const blocks = docxBlocksTitle(`中英对照 · ${today()}`);
+      for (const s of segs) {
+        blocks.push({ type: 'p', text: s.src, bold: false });
+        blocks.push({ type: 'p', text: s.tgt || '（待译）', italic: true, gray: true });
+      }
+      IO.download(`中英对照_${state.project}_${today()}.docx`, Write.buildDocx(blocks), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    };
+    $('#btnSentDocx').onclick = () => {
+      const segs = exportSegs();
+      const rows = segs.map((s, i) => [i + 1, s.src, s.tgt || '']);
+      const blocks = docxBlocksTitle(`句句对照 · ${today()}`)
+        .concat([{ type: 'table', header: ['序号', '中文原文', '英文译文'], rows }]);
+      IO.download(`句句对照_${state.project}_${today()}.docx`, Write.buildDocx(blocks), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    };
+    $('#btnSentXlsx').onclick = () => {
+      const segs = exportSegs();
+      const rows = [['序号', '中文原文', '英文译文', '匹配率', '状态']]
+        .concat(segs.map((s, i) => [i + 1, s.src, s.tgt || '', s.bestScore || 0, s.status === 'translated' ? '已译' : '未译']));
+      IO.download(`句句对照_${state.project}_${today()}.xlsx`, Write.buildXlsx([{ name: '句句对照', rows }]), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    };
+    $('#btnSentCsv').onclick = () => {
+      const segs = exportSegs();
+      const rows = [['序号', '中文原文', '英文译文', '匹配率', '状态']]
+        .concat(segs.map((s, i) => [i + 1, s.src, s.tgt || '', s.bestScore || 0, s.status === 'translated' ? '已译' : '未译']));
+      IO.download(`句句对照_${state.project}_${today()}.csv`, IO.buildDelimited(rows, ','), 'text/csv;charset=utf-8');
     };
     $('#btnExpBilingual').onclick = () => {
       const rows = [['#', '状态', '匹配', '中文', '英文']]
-        .concat(state.segments.map((s, i) => [i + 1, s.status === 'translated' ? '已译' : '未译', s.bestScore || 0, s.src, s.tgt || '']));
+        .concat(exportSegs().map((s, i) => [i + 1, s.status === 'translated' ? '已译' : '未译', s.bestScore || 0, s.src, s.tgt || '']));
       const html = bilingualHtml(rows);
       IO.download(`双语对照_${state.project}_${today()}.html`, html, 'text/html;charset=utf-8');
     };

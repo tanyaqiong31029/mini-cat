@@ -140,25 +140,44 @@
 
 <dialog id="dlgExport">
   <form method="dialog" class="dlg-form"><h3>导出</h3>
-    <div class="export-grid">
-      <button id="btnExpTarget" class="btn" type="button">译文纯文本 (txt)</button>
-      <button id="btnExpBilingual" class="btn" type="button">双语对照表 (html)</button>
-      <button id="btnExpTMX" class="btn" type="button">记忆库 (tmx)</button>
-      <button id="btnExpTmCsv" class="btn" type="button">记忆库 (csv)</button>
-      <button id="btnExpJsonl" class="btn" type="button">平行语料 (jsonl)</button>
-      <button id="btnExpTbxBasic" class="btn" type="button">术语库 (tbx)</button>
-      <button id="btnExpTermCsv" class="btn" type="button">术语库 (csv)</button>
-    </div>
+    <label>导出范围（对译文交付类生效）
+      <select id="expRange">
+        <option value="translated">仅已确认段落</option>
+        <option value="all">全部段落（未译留空）</option>
+      </select>
+    </label>
+    <fieldset><legend>译文交付</legend>
+      <div class="export-grid">
+        <button id="btnDocPure" class="btn" type="button">纯译文 (docx)</button>
+        <button id="btnDocPureTxt" class="btn" type="button">纯译文 (txt)</button>
+        <button id="btnBiParaDocx" class="btn" type="button">中英对照·段落式 (docx)</button>
+        <button id="btnSentDocx" class="btn" type="button">句句对照表格 (docx)</button>
+        <button id="btnSentXlsx" class="btn" type="button">句句对照表格 (xlsx)</button>
+        <button id="btnSentCsv" class="btn" type="button">句句对照表格 (csv)</button>
+        <button id="btnExpBilingual" class="btn" type="button">双语对照表 (html)</button>
+      </div>
+      <p class="hint">纯译文按原文段落自动重建（英文句连回段落）；句句对照为「序号｜中文｜英文」三列表格，与项目交付件格式一致。</p>
+    </fieldset>
+    <fieldset><legend>翻译数据</legend>
+      <div class="export-grid">
+        <button id="btnExpTMX" class="btn" type="button">记忆库 (tmx)</button>
+        <button id="btnExpTmCsv" class="btn" type="button">记忆库 (csv)</button>
+        <button id="btnExpJsonl" class="btn" type="button">平行语料 (jsonl)</button>
+        <button id="btnExpTbxBasic" class="btn" type="button">术语库 (tbx)</button>
+        <button id="btnExpTermCsv" class="btn" type="button">术语库 (csv)</button>
+      </div>
+    </fieldset>
     <p class="hint">导出的 TMX / TBX 可直接回流 porcelain-china-corpus 或导入 Trados / memoQ。</p>
     <div class="dlg-actions"><button class="btn" value="cancel">关闭</button></div>
   </form>
 </dialog>
 
-<script src="js/core.js?v=1.1"></script>
-<script src="js/db.js?v=1.1"></script>
-<script src="js/zip.js?v=1.1"></script>
-<script src="js/msoffice.js?v=1.1"></script>
-<script src="js/io.js?v=1.1"></script>
-<script src="js/app.js?v=1.1"></script>
+<script src="js/core.js?v=1.2"></script>
+<script src="js/db.js?v=1.2"></script>
+<script src="js/zip.js?v=1.2"></script>
+<script src="js/msoffice.js?v=1.2"></script>
+<script src="js/io.js?v=1.2"></script>
+<script src="js/officewrite.js?v=1.2"></script>
+<script src="js/app.js?v=1.2"></script>
 </body>
 </html>

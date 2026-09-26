@@ -2,3 +2,4 @@
 _smoke_*
 node_modules/
 *.log
+_roundtrip*
