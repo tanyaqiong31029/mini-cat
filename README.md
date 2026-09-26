@@ -6,6 +6,8 @@
 
 ![Mini-CAT 界面](docs/screenshot.png)
 
+> 🔗 **在线使用（零后端，数据不出浏览器）**：<https://tanyaqiong31029.github.io/mini-cat/>
+
 ## 为什么不用现成工具
 
 | | Trados / memoQ | MateCat / Weblate | **Mini-CAT** |
@@ -34,7 +36,7 @@
 
 **方式一（最简单）**：下载本仓库，双击 `index.html`。
 
-**方式二（GitHub Pages）**：仓库 Settings → Pages → 选 main 分支根目录，之后访问 `https://<用户名>.github.io/mini-cat/`。
+**方式二（GitHub Pages，推荐）**：直接访问 <https://tanyaqiong31029.github.io/mini-cat/>——本仓库已开启 Pages，点开即用。fork 后请在 Settings → Pages 选 main 分支根目录自行开启。
 
 **方式三（本地服务器）**：
 
