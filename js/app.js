@@ -5,6 +5,7 @@
   const $ = sel => document.querySelector(sel);
   const $$ = sel => [...document.querySelectorAll(sel)];
   const esc = Core.escapeHtml;
+  const Rich = window.MiniCatRichText;
 
   /* ---------------- state ---------------- */
   const state = {
@@ -298,13 +299,20 @@
           <button class="linkbtn cmt-btn" data-i="${i}">💬${seg.comments && seg.comments.length ? seg.comments.length : ''}</button>
         </div>
         <div class="seg-src">${srcHtml}</div>
-        <textarea class="seg-tgt" data-i="${i}" rows="2" placeholder="输入译文…">${esc(seg.tgt || '')}</textarea>
+        <div class="format-bar" role="toolbar" aria-label="译文格式">
+          <button type="button" data-format="bold" title="加粗 Ctrl/Cmd+B"><b>B</b></button>
+          <button type="button" data-format="italic" title="斜体 Ctrl/Cmd+I"><i>I</i></button>
+          <button type="button" data-format="underline" title="下划线 Ctrl/Cmd+U"><u>U</u></button>
+          <button type="button" data-format="superscript" title="上标">x²</button>
+          <button type="button" data-format="subscript" title="下标">x₂</button>
+          <button type="button" data-format="clear">清除格式</button>
+          <span>选中译文后设置</span>
+        </div>
+        <div class="seg-tgt" data-i="${i}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="第 ${i + 1} 段译文" data-placeholder="输入译文…">${Rich.toHTML(seg.tgtRuns, seg.tgt || '')}</div>
         <div class="seg-extra" data-i="${i}" hidden></div>
       </div>`);
     }
     box.innerHTML = html.join('') || '<div class="empty">暂无句段。点击「导入原文」开始。</div>';
-    // autosize textareas
-    $$('.seg-tgt').forEach(t => { t.style.height = 'auto'; t.style.height = Math.max(44, t.scrollHeight + 2) + 'px'; });
   }
 
   function renderStats() {
@@ -404,31 +412,80 @@
     });
 
     // segment interactions
-    $('#segments').addEventListener('input', e => {
-      if (e.target.classList.contains('seg-tgt')) {
-        const i = +e.target.dataset.i;
-        state.segments[i].tgt = e.target.value;
-        state.segments[i].applied = false;
-        e.target.style.height = 'auto';
-        e.target.style.height = Math.max(44, e.target.scrollHeight + 2) + 'px';
-        saveProjectDebounced();
+    const editHistory = new WeakMap();
+    function recordEditor(editor, remember = true) {
+      const seg = state.segments[+editor.dataset.i];
+      const previous = Rich.normalize(seg.tgtRuns, seg.tgt || '');
+      const next = Rich.fromDOM(editor);
+      if (remember && JSON.stringify(previous) !== JSON.stringify(next.runs)) {
+        const h = editHistory.get(editor) || { undo: [], redo: [] };
+        h.undo.push(previous); if (h.undo.length > 100) h.undo.shift(); h.redo = [];
+        editHistory.set(editor, h);
+      }
+      seg.tgt = next.text; seg.tgtRuns = next.runs; seg.applied = false;
+      saveProjectDebounced();
+    }
+    function formatEditor(editor, kind) {
+      if (!editor || !Rich.applyFormat(editor, kind)) { log('请先选中本段译文中的文字，再设置格式。'); return; }
+      recordEditor(editor);
+    }
+    $('#segments').addEventListener('mousedown', e => {
+      if (e.target.closest('[data-format]')) e.preventDefault();
+    });
+    $('#segments').addEventListener('keydown', e => {
+      const editor = e.target.closest('.seg-tgt');
+      if (!editor || e.isComposing || !(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      const kind = { b: 'bold', i: 'italic', u: 'underline' }[key];
+      if (kind) { e.preventDefault(); formatEditor(editor, kind); }
+      if (key === 'z' || key === 'y') {
+        e.preventDefault();
+        const h = editHistory.get(editor); if (!h) return;
+        const redo = key === 'y' || e.shiftKey, from = redo ? h.redo : h.undo, to = redo ? h.undo : h.redo;
+        if (!from.length) return;
+        to.push(Rich.fromDOM(editor).runs);
+        const runs = from.pop(); editor.innerHTML = Rich.toHTML(runs);
+        Rich.restoreSelection(editor, Rich.text(runs).length, Rich.text(runs).length);
+        recordEditor(editor, false);
       }
     });
+    // Never insert clipboard/drop HTML, scripts, images or external attributes.
+    function insertPlain(editor, text) {
+      const pos = Rich.selectionOffsets(editor);
+      if (!pos) { editor.focus(); Rich.restoreSelection(editor, Rich.fromDOM(editor).text.length, Rich.fromDOM(editor).text.length); }
+      const selection = window.getSelection(), range = selection.getRangeAt(0);
+      range.deleteContents(); const node = document.createTextNode(text.replace(/\r\n?/g, '\n'));
+      range.insertNode(node); range.setStartAfter(node); range.collapse(true);
+      selection.removeAllRanges(); selection.addRange(range); recordEditor(editor);
+    }
+    $('#segments').addEventListener('paste', e => {
+      const editor = e.target.closest('.seg-tgt'); if (!editor) return;
+      e.preventDefault(); insertPlain(editor, (e.clipboardData && e.clipboardData.getData('text/plain')) || '');
+    });
+    $('#segments').addEventListener('drop', e => {
+      if (e.target.closest('.seg-tgt')) { e.preventDefault(); e.stopPropagation(); log('请使用粘贴插入文字，避免拖入不可信富文本。'); }
+    });
+    $('#segments').addEventListener('input', e => {
+      const editor = e.target.closest('.seg-tgt');
+      if (editor) recordEditor(editor);
+    });
     $('#segments').addEventListener('click', async e => {
+      const formatButton = e.target.closest('[data-format]');
+      if (formatButton) { formatEditor(formatButton.closest('.seg').querySelector('.seg-tgt'), formatButton.dataset.format); return; }
       const t = e.target;
       if (t.classList.contains('confirm-seg')) {
         const i = +t.dataset.i, seg = state.segments[i];
-        seg.tgt = (seg.tgt || '').trim();
-        if (!seg.tgt) { alert('译文为空。'); return; }
+        if (!(seg.tgt || '').trim()) { alert('译文为空。'); return; }
         seg.status = 'translated';
         // 修订留痕：确认即追加版本（V1 初稿，或与上一版文本不同的新版本）
         if (!Array.isArray(seg.revisions)) seg.revisions = [];
         const lastRev = seg.revisions[seg.revisions.length - 1];
-        if (!lastRev || !Diff.sameText(lastRev.text, seg.tgt)) {
+        if (!lastRev || !Diff.sameText(lastRev.text, seg.tgt) || JSON.stringify(Rich.normalize(lastRev.runs, lastRev.text)) !== JSON.stringify(Rich.normalize(seg.tgtRuns, seg.tgt))) {
           seg.revisions.push({
             v: 'V' + (seg.revisions.length + 1),
             author: state.author || '译者',
             text: seg.tgt,
+            runs: Rich.normalize(seg.tgtRuns, seg.tgt),
             date: new Date().toISOString().slice(0, 10)
           });
           seg.author = seg.author || (state.author || '译者');
@@ -504,7 +561,7 @@
       const row = e.target.closest('.match-row');
       const idx = parseInt(($('#matchSegIdx').textContent.match(/\d+/) || [0])[0]) - 1;
       const ta = $(`.seg-tgt[data-i="${idx}"]`);
-      if (ta) { ta.value = row.dataset.tgt; ta.dispatchEvent(new Event('input', { bubbles: true })); }
+      if (ta) { ta.textContent = row.dataset.tgt; ta.dispatchEvent(new Event('input', { bubbles: true })); }
     });
 
     // sidebar tabs
@@ -516,6 +573,80 @@
     state.switchSide = switchSide;
 
     $('#termSearch').oninput = renderTerms;
+    // Candidate text is immutable; human decisions are maintained separately.
+    let candidateBatch = null, candidatePage = 0, candidateDecisions = [], candidateWorker = null, candidateTimer = null;
+    const candidateSnapshot = () => JSON.stringify(state.segments.map(s=>[s.src,s.tgt]));
+    function cancelCandidateScan() {
+      if(candidateWorker)candidateWorker.terminate(); candidateWorker=null;
+      clearTimeout(candidateTimer); candidateTimer=null;
+    }
+    function renderCandidates() {
+      const all=candidateBatch ? candidateBatch.candidates : [], start=candidatePage*50;
+      $('#candidateList').innerHTML=all.slice(start,start+50).map((c,j)=>{
+        const i=start+j,d=candidateDecisions[i];
+        return `<div class="candidate-row" data-candidate="${i}"><label><input type="checkbox" class="candidate-accept" ${d.accept?'checked':''}> ${esc(c.term)} · ${c.freq} 次</label>
+          <input type="text" class="candidate-en" aria-label="${esc(c.term)} 的英文译名" maxlength="2000" value="${esc(d.tgt)}" placeholder="填写或确认英文译名">
+          <div class="candidate-context">统计候选：${esc((c.translations||[]).map(t=>t.t).join(' / ')||'证据不足，译名留空')}（仅供参考）</div>
+          ${(c.contexts||[]).map(ctx=>`<div class="candidate-context">原：${esc(ctx.src)}<br>译：${esc(ctx.tgt)}</div>`).join('')}</div>`;
+      }).join('') || '<div class="empty">暂无新候选术语。</div>';
+      $('#candidatePage').textContent=`${all.length?candidatePage+1:0} / ${Math.ceil(all.length/50)} 页 · 已选 ${candidateDecisions.filter(d=>d.accept).length}`;
+      $('#candidatePrev').disabled=candidatePage===0;
+      $('#candidateNext').disabled=start+50>=all.length;
+      $('#btnCandidateCommit').disabled=!candidateDecisions.some(d=>d.accept);
+    }
+    function scanCandidates() {
+      cancelCandidateScan(); candidateBatch=null; candidateDecisions=[]; candidatePage=0;renderCandidates();
+      const project=state.project,snapshot=candidateSnapshot();
+      $('#candidateStatus').textContent='正在扫描全部句段…';
+      try {
+        const worker=new Worker('js/term-worker.js?v=1.7');candidateWorker=worker;
+        const fail=message=>{if(candidateWorker!==worker)return;cancelCandidateScan();$('#candidateStatus').textContent=message;};
+        worker.onerror=()=>fail('提取失败。请刷新页面后重试。');
+        candidateTimer=setTimeout(()=>fail('扫描超过 60 秒，请拆分项目后重试。'),60000);
+        worker.onmessage=e=>{
+          if(candidateWorker!==worker)return;cancelCandidateScan();
+          if(project!==state.project || snapshot!==candidateSnapshot()){$('#candidateStatus').textContent='工作区已变化，请重新扫描。';return;}
+          if(e.data.error){$('#candidateStatus').textContent=e.data.error;return;}
+          candidateBatch={...e.data.result,project,snapshot};
+          candidateDecisions=candidateBatch.candidates.map(c=>({term:c.term,accept:false,tgt:((c.translations||[])[0]||{}).t||''}));
+          const s=candidateBatch.stats;
+          $('#candidateStatus').textContent=`已扫描 ${state.segments.length} 段，有效句对 ${s.eligible}，跳过未译/空段 ${s.skipped}，排除已有术语 ${s.existing}，待复核 ${candidateDecisions.length} 条（最多展示前 300 条）。${candidateBatch.warning||''}`;
+          renderCandidates();
+        };
+        worker.postMessage({segments:state.segments.map(s=>({src:s.src,tgt:s.tgt})),existing:state.terms.map(t=>({zh:t.zh})),minFreq:Number($('#candidateMinFreq').value)});
+      }catch(error){cancelCandidateScan();$('#candidateStatus').textContent='无法启动本地提取：'+error.message;}
+    }
+    $('#btnTermExtract').onclick=()=>{$('#dlgTermCandidates').showModal();scanCandidates();};
+    $('#btnCandidateScan').onclick=scanCandidates;
+    $('#dlgTermCandidates').addEventListener('close',cancelCandidateScan);
+    $('#candidateList').addEventListener('input',e=>{
+      const row=e.target.closest('[data-candidate]');if(!row)return;
+      const d=candidateDecisions[+row.dataset.candidate];
+      if(e.target.classList.contains('candidate-accept'))d.accept=e.target.checked;
+      if(e.target.classList.contains('candidate-en'))d.tgt=e.target.value;
+      $('#btnCandidateCommit').disabled=!candidateDecisions.some(d=>d.accept);
+      $('#candidatePage').textContent=`${candidatePage+1} / ${Math.ceil(candidateDecisions.length/50)} 页 · 已选 ${candidateDecisions.filter(d=>d.accept).length}`;
+    });
+    $('#candidatePrev').onclick=()=>{if(candidatePage>0){candidatePage--;renderCandidates();}};
+    $('#candidateNext').onclick=()=>{if((candidatePage+1)*50<candidateDecisions.length){candidatePage++;renderCandidates();}};
+    $('#btnCandidateDecisions').onclick=()=>{
+      if(!candidateBatch)return;
+      const result=window.MiniCatTermEngine.validateDecisions(candidateDecisions,candidateBatch.candidates);
+      if(!result.valid){alert(result.errors.join('；'));return;}
+      IO.download('decisions.json',JSON.stringify(candidateDecisions,null,2),'application/json');
+      IO.download('candidates.json',JSON.stringify({candidates:candidateBatch.candidates},null,2),'application/json');
+    };
+    $('#btnCandidateCommit').onclick=async()=>{
+      if(!candidateBatch)return;
+      if(candidateBatch.project!==state.project || candidateBatch.snapshot!==candidateSnapshot()){$('#candidateStatus').textContent='工作区已变化，请重新扫描后复核。';$('#btnCandidateCommit').disabled=true;return;}
+      try {
+        const rows=window.MiniCatCandidates.acceptedRows(candidateBatch.candidates,candidateDecisions);
+        if(!rows.length)return;
+        $('#btnCandidateCommit').disabled=true;
+        const count=await withWorkspaceLocked(()=>addTermRows(rows));
+        $('#dlgTermCandidates').close();renderStats();log(`已将 ${count} 条人工确认术语整理入当前项目术语表，可导出 CSV/TBX；重复项不覆盖。`);
+      }catch(error){$('#candidateStatus').textContent=error.message;$('#btnCandidateCommit').disabled=false;}
+    };
     $('#termList').addEventListener('click', e => {
       const btn = e.target.closest('.webref-go');
       if (!btn) return;
@@ -894,12 +1025,16 @@
       for (const s of segs) {
         const t = zhSide ? (s.src || '') : (s.tgt || '');
         if (cur === null || s.para == null || s.para !== cur.para) {
-          cur = { para: s.para, parts: [] };
+          cur = { para: s.para, parts: [], runs: [] };
           out.push(cur);
         }
-        cur.parts.push(t.trim());
+        if (t) {
+          if (cur.parts.length && !zhSide) cur.runs.push({ text: ' ' });
+          cur.parts.push(t);
+          cur.runs.push(...Rich.normalize(zhSide ? null : s.tgtRuns, t));
+        }
       }
-      return out.map(p => ({ para: p.para, text: p.parts.filter(Boolean).join(zhSide ? '' : ' ') }));
+      return out.map(p => ({ para: p.para, text: p.parts.join(zhSide ? '' : ' '), runs: Rich.normalize(p.runs) }));
     }
     function docxBlocksTitle(sub) {
       return [{ type: 'h1', text: state.project }, { type: 'p', text: sub, italic: true, gray: true }];
@@ -907,7 +1042,7 @@
     $('#btnDocPure').onclick = () => {
       const paras = paragraphsFromSegs(exportSegs(), false);
       const blocks = docxBlocksTitle(`纯译文 · ${today()}`)
-        .concat(paras.map(p => ({ type: 'p', text: p.text || '（待译）' })));
+        .concat(paras.map(p => ({ type: 'p', text: p.text || '（待译）', runs: p.runs })));
       IO.download(`纯译文_${state.project}_${today()}.docx`, Write.buildDocx(blocks), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     };
     $('#btnDocPureTxt').onclick = () => {
@@ -920,13 +1055,13 @@
       const blocks = docxBlocksTitle(`中英对照 · ${today()}`);
       for (const s of segs) {
         blocks.push({ type: 'p', text: s.src, bold: false });
-        blocks.push({ type: 'p', text: s.tgt || '（待译）', italic: true, gray: true });
+        blocks.push({ type: 'p', text: s.tgt || '（待译）', runs: Rich.normalize(s.tgtRuns, s.tgt || '（待译）') });
       }
       IO.download(`中英对照_${state.project}_${today()}.docx`, Write.buildDocx(blocks), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     };
     $('#btnSentDocx').onclick = () => {
       const segs = exportSegs();
-      const rows = segs.map((s, i) => [i + 1, s.src, s.tgt || '']);
+      const rows = segs.map((s, i) => [i + 1, s.src, { text: s.tgt || '', runs: Rich.normalize(s.tgtRuns, s.tgt || '') }]);
       const blocks = docxBlocksTitle(`句句对照 · ${today()}`)
         .concat([{ type: 'table', header: ['序号', '中文原文', '英文译文'], rows }]);
       IO.download(`句句对照_${state.project}_${today()}.docx`, Write.buildDocx(blocks), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -955,9 +1090,13 @@
         const prev = revs.length >= 2 ? revs[revs.length - 2] : null;
         blocks.push({ type: 'p', text: seg.src, bold: true, size: 21 });
         if (prev) {
-          blocks.push({ type: 'trk', ops: Diff.diffWords(prev.text, last.text), author: last.author, date: last.date + 'T00:00:00Z' });
+          const oldRuns=Rich.normalize(prev.runs,prev.text),newRuns=Rich.normalize(last.runs,last.text);
+          const formatted=[...oldRuns,...newRuns].some(r=>r.bold||r.italic||r.underline||r.superscript||r.subscript);
+          blocks.push(formatted
+            ? {type:'trk',previous:{text:prev.text,runs:oldRuns},current:{text:last.text,runs:newRuns},author:last.author,date:last.date+'T00:00:00Z'}
+            : { type: 'trk', ops: Diff.diffWords(prev.text, last.text), author: last.author, date: last.date + 'T00:00:00Z' });
         } else {
-          blocks.push({ type: 'p', text: last.text, italic: true, gray: true });
+          blocks.push({ type: 'p', text: last.text, runs: Rich.normalize(last.runs, last.text) });
         }
         const chain = revs.map(rv => `${rv.v} ${rv.author} ${rv.date}`).join(' → ');
         const cmts = seg.comments || [];
@@ -993,7 +1132,7 @@
     };
     $('#btnExpBilingual').onclick = () => {
       const rows = [['#', '状态', '匹配', '中文', '英文']]
-        .concat(exportSegs().map((s, i) => [i + 1, s.status === 'translated' ? '已译' : '未译', s.bestScore || 0, s.src, s.tgt || '']));
+        .concat(exportSegs().map((s, i) => [i + 1, s.status === 'translated' ? '已译' : '未译', s.bestScore || 0, s.src, { text: s.tgt || '', runs: Rich.normalize(s.tgtRuns, s.tgt || '') }]));
       const html = bilingualHtml(rows);
       IO.download(`双语对照_${state.project}_${today()}.html`, html, 'text/html;charset=utf-8');
     };
@@ -1185,6 +1324,7 @@
             seg.revisions.push({ v, author: resolveAuthor(p.pair || p), text: p.en, date: resolveDate(p.pair || p) });
           }
           seg.tgt = p.en;
+          seg.tgtRuns = Rich.normalize(null, p.en);
           seg.status = 'translated';
           seg.applied = false;
           revN++;
@@ -1284,12 +1424,12 @@
       const escH = Core.escapeHtml;
       let h = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>双语对照 ${escH(state.project)}</title>
       <style>body{font-family:'Songti SC',SimSun,Georgia,serif;margin:40px auto;max-width:1000px;color:#222}
-      table{border-collapse:collapse;width:100%;font-size:14px}td,th{border:1px solid #bbb;padding:6px 8px;vertical-align:top;text-align:left}
+      table{border-collapse:collapse;width:100%;font-size:14px}td,th{border:1px solid #bbb;padding:6px 8px;vertical-align:top;text-align:left;white-space:pre-wrap}
       th{background:#f2ede4}tr:nth-child(even) td{background:#faf8f4}.zh{width:38%}.en{width:42%}</style></head><body>
       <h2>双语对照 — ${escH(state.project)}</h2><p>Mini-CAT 导出 · ${today()}</p>
       <table><tr><th>#</th><th>状态</th><th>匹配</th><th class="zh">中文</th><th class="en">英文</th></tr>`;
       for (const r of rows.slice(1)) {
-        h += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${escH(r[3])}</td><td>${escH(r[4])}</td></tr>`;
+        h += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${escH(r[3])}</td><td>${typeof r[4]==='object'?Rich.toHTML(r[4].runs,r[4].text):escH(r[4])}</td></tr>`;
       }
       h += '</table></body></html>';
       return h;

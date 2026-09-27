@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mini-CAT · 轻量翻译记忆工作台</title>
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=1.7">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>瓷</text></svg>">
 </head>
 <body>
@@ -61,6 +61,7 @@
     <div class="side-pane" data-pane="terms" style="display:none">
       <div class="pane-head">
         <input id="termSearch" type="search" placeholder="搜索术语…">
+        <button id="btnTermExtract" type="button" class="btn">扫描句段，提取候选术语</button>
       </div>
       <div id="termList" class="pane-body"></div>
     </div>
@@ -168,7 +169,7 @@
         <button id="btnSentCsv" class="btn" type="button">句句对照表格 (csv)</button>
         <button id="btnExpBilingual" class="btn" type="button">双语对照表 (html)</button>
       </div>
-      <p class="hint">纯译文按原文段落自动重建（英文句连回段落）；句句对照为「序号｜中文｜英文」三列表格，与项目交付件格式一致。</p>
+      <p class="hint">Word 与 HTML 交付保留网页译文的加粗、斜体、下划线和上下标。TXT、CSV、XLSX 及翻译记忆导出仅保留文字。纯译文按原文段落自动重建。</p>
     </fieldset>
     <fieldset><legend>审校与修订</legend>
       <div class="export-grid">
@@ -227,15 +228,34 @@
   </form>
 </dialog>
 
+<dialog id="dlgTermCandidates">
+  <form method="dialog" class="dlg-form">
+    <h3>候选术语复核（中文 → 英文）</h3>
+    <p class="hint">本机扫描所有已有译文的句段，不上传文本、不调用付费服务。统计译名不是定稿：请结合例句修改译名，并逐条勾选确认。每页最多 50 条，未勾选项不入库。</p>
+    <label>最低出现次数 <select id="candidateMinFreq"><option value="2">2 次（推荐）</option><option value="1">1 次（噪声较多）</option></select></label>
+    <button id="btnCandidateScan" type="button" class="btn">重新扫描</button>
+    <div id="candidateStatus" role="status"></div>
+    <div id="candidateList"></div>
+    <div class="dlg-actions">
+      <button id="candidatePrev" type="button" class="btn">上一页</button><span id="candidatePage"></span><button id="candidateNext" type="button" class="btn">下一页</button>
+      <button id="btnCandidateDecisions" type="button" class="btn">导出复核记录 JSON</button>
+      <button id="btnCandidateCommit" type="button" class="btn primary" disabled>确认选中项并入术语表</button>
+      <button class="btn" value="cancel">关闭</button>
+    </div>
+  </form>
+</dialog>
 <script src="js/core.js?v=1.6c"></script>
+<script src="js/term-engine.js?v=1.7"></script>
+<script src="js/term-candidates.js?v=1.7"></script>
 <script src="js/db.js?v=1.6c"></script>
 <script src="js/zip.js?v=1.6c"></script>
 <script src="js/msoffice.js?v=1.6c"></script>
-<script src="js/io.js?v=1.6c"></script>
-<script src="js/officewrite.js?v=1.6c"></script>
+<script src="js/richtext.js?v=1.7"></script>
+<script src="js/io.js?v=1.7"></script>
+<script src="js/officewrite.js?v=1.7"></script>
 <script src="js/webref.js?v=1.6c"></script>
 <script src="js/diff.js?v=1.6c"></script>
 <script src="js/revision-plan.js?v=1.6d"></script>
-<script src="js/app.js?v=1.6d"></script>
+<script src="js/app.js?v=1.7"></script>
 </body>
 </html>

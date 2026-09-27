@@ -128,11 +128,24 @@ main { display: flex; flex: 1; min-height: 0; }
 mark.term { background: #ffe9b8; border-bottom: 1px solid var(--amber); cursor: help; padding: 0 1px; border-radius: 2px; }
 .seg-tgt {
   width: 100%; border: 1px solid var(--line); border-radius: 6px;
-  font-size: 15px; line-height: 1.6; padding: 6px 8px; resize: vertical;
+  font-size: 15px; line-height: 1.6; padding: 6px 8px; min-height: 48px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
   font-family: Georgia, "Times New Roman", serif;
   background: #fffdf8;
 }
 .seg-tgt:focus { outline: 2px solid var(--celadon-light); border-color: var(--celadon); }
+.seg-tgt:empty:before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
+.format-bar { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 6px 0; }
+.format-bar button { min-width: 30px; min-height: 28px; background: white; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.format-bar button:hover { background: var(--celadon-light); }
+.format-bar span { font-size: 11px; color: var(--muted); }
+.candidate-row { border-bottom: 1px solid var(--line); padding: 9px 0; }
+.candidate-row input[type=text] { width: 100%; margin: 3px 0; }
+.candidate-context { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+#candidateList { max-height: 48vh; overflow-y: auto; }
+#dlgTermCandidates .dlg-actions { flex-wrap: wrap; align-items: center; }
+#dlgTermCandidates .dlg-actions button { white-space: nowrap; }
+#candidatePage { font-size: 12px; color: var(--muted); }
 
 .match-row, .conc-row, .term-row {
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px;

@@ -40,9 +40,9 @@ const { chromium } = require('@playwright/test');
       window.auditBackup = null;
       MiniCatIO.download = (_name, data) => { window.auditBackup = JSON.parse(data); };
       const ta = document.querySelector('.seg-tgt');
-      ta.value = 'older'; ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.textContent = 'older'; ta.dispatchEvent(new Event('input', { bubbles: true }));
       document.querySelector('#btnBackup').click();
-      ta.value = 'latest before new'; ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.textContent = 'latest before new'; ta.dispatchEvent(new Event('input', { bubbles: true }));
       document.querySelector('#projNew').click();
     });
     await page.waitForFunction(() => document.querySelector('#projSelect').value === 'New Project');
@@ -91,8 +91,8 @@ const { chromium } = require('@playwright/test');
     await page.waitForFunction(() => !document.querySelector('#btnRevCommit').disabled);
     await page.locator('#btnRevCommit').click();
     await page.waitForFunction(() => !document.querySelector('#dlgRevision').open);
-    await page.waitForFunction(() => JSON.stringify([...document.querySelectorAll('.seg-tgt')].map(n => n.value)) === JSON.stringify(['First A', 'Middle B', 'Second A']));
-    assert.deepEqual(await page.locator('.seg-tgt').evaluateAll(nodes => nodes.map(n => n.value)), ['First A', 'Middle B', 'Second A']);
+    await page.waitForFunction(() => JSON.stringify([...document.querySelectorAll('.seg-tgt')].map(n => n.textContent)) === JSON.stringify(['First A', 'Middle B', 'Second A']));
+    assert.deepEqual(await page.locator('.seg-tgt').evaluateAll(nodes => nodes.map(n => n.textContent)), ['First A', 'Middle B', 'Second A']);
     console.log('PASS repeated paragraph revision maps by occurrence');
     await page.locator('#btnImportRevision').click();
     await page.locator('#revFile').setInputFiles({ name: 'ambiguous.tsv', mimeType: 'text/tab-separated-values', buffer: Buffer.from('中文\t英文\n甲段落内容。\tAmbiguous A') });
@@ -105,7 +105,7 @@ const { chromium } = require('@playwright/test');
       const gate = new Promise(resolve => { release = resolve; });
       MiniCatDB.Projects.get = async (...args) => { await gate; return originalGet(...args); };
       const ta = document.querySelector('.seg-tgt');
-      ta.value = 'must not return after wipe'; ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.textContent = 'must not return after wipe'; ta.dispatchEvent(new Event('input', { bubbles: true }));
       document.querySelector('#btnBackup').click();
       document.querySelector('#btnWipe').click();
       release();
@@ -114,6 +114,89 @@ const { chromium } = require('@playwright/test');
     await page.waitForFunction(() => document.querySelectorAll('.seg-tgt').length === 0);
     assert.equal(await page.evaluate(n => MiniCatDB.Projects.get(n).then(p => p.segments.length), oldName), 0);
     console.log('PASS queued save cannot undo workspace clear');
+
+    // Rich text edit -> save -> reload -> backup restore -> actual DOCX exports.
+    await page.evaluate(async n => {
+      const p = await MiniCatDB.Projects.get(n);
+      p.segments = [{src:'格式测试。',tgt:'Bold italic 2 x',status:'translated',para:0}];
+      await MiniCatDB.Projects.put(p);
+    }, oldName);
+    await page.reload(); await ready();
+    const selectText = (start,end) => page.evaluate(([a,b])=>MiniCatRichText.restoreSelection(document.querySelector('.seg-tgt'),a,b),[start,end]);
+    await selectText(0,4); await page.locator('[data-format=bold]').click();
+    await selectText(5,11); await page.keyboard.press('Control+i');
+    await selectText(0,4); await page.keyboard.press('Control+u');
+    await selectText(12,13); await page.locator('[data-format=superscript]').click();
+    await selectText(14,15); await page.locator('[data-format=subscript]').click();
+    assert.equal(await page.locator('.seg-tgt strong').textContent(),'Bold');
+    assert.equal(await page.locator('.seg-tgt em').textContent(),'italic');
+    assert.equal(await page.locator('.seg-tgt sup').textContent(),'2');
+    assert.equal(await page.locator('.seg-tgt sub').textContent(),'x');
+    if (process.env.MINICAT_QA_DIR) {
+      await fs.mkdir(process.env.MINICAT_QA_DIR,{recursive:true});
+      await page.screenshot({path:path.join(process.env.MINICAT_QA_DIR,'rich-editor.png'),fullPage:true});
+    }
+    await page.evaluate(()=>{window.capturedBackup=null;MiniCatIO.download=(_n,data)=>{window.capturedBackup=JSON.parse(data);};document.querySelector('#btnBackup').click();});
+    await page.waitForFunction(()=>window.capturedBackup);
+    const backup = await page.evaluate(()=>window.capturedBackup);
+    await page.reload(); await ready();
+    assert.equal(await page.locator('.seg-tgt strong').textContent(),'Bold');
+    await page.locator('#btnWipe').click();
+    await page.waitForFunction(()=>!document.querySelector('.seg-tgt'));
+    await page.locator('#fileRestore').setInputFiles({name:'rich.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
+    await page.waitForFunction(()=>document.querySelector('#log').textContent.includes('备份恢复完成'));
+    assert.equal(await page.locator('.seg-tgt sub').textContent(),'x');
+    await selectText(0,4); await page.locator('[data-format=clear]').click();
+    assert.equal(await page.locator('.seg-tgt strong').count(),0);
+    await page.keyboard.press('Control+z');
+    assert.equal(await page.locator('.seg-tgt strong').count(),1);
+    await page.evaluate(()=>{window.exports={};MiniCatIO.download=(n,data)=>window.exports[n]=typeof data==='string'?data:Array.from(data);});
+    await page.locator('#btnExport').click();
+    await page.locator('#expRange').selectOption('all');
+    for (const id of ['btnDocPure','btnBiParaDocx','btnSentDocx','btnExpBilingual']) await page.locator('#'+id).click();
+    const exports = await page.evaluate(()=>window.exports);
+    const Zip = require('../js/zip.js');
+    for (const [name,data] of Object.entries(exports)) {
+      if(name.endsWith('.docx')) {
+        const xml=await Zip.extractText(Uint8Array.from(data),'word/document.xml');
+        for(const marker of ['<w:b/>','<w:i/>','<w:u w:val="single"/>','w:val="superscript"','w:val="subscript"'])assert.ok(xml.includes(marker),name+':'+marker);
+      } else { assert.ok(data.includes('<strong>Bold</strong>')); assert.ok(data.includes('<em>italic</em>')); }
+    }
+    await page.evaluate(()=>document.querySelector('#dlgExport').close());
+    await selectText(0,4);
+    await page.evaluate(()=>{
+      const data=new DataTransfer();data.setData('text/plain','safe');data.setData('text/html','<img src=x onerror="window.pasteXss=1">');
+      document.querySelector('.seg-tgt').dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}));
+    });
+    assert.equal(await page.locator('.seg-tgt img').count(),0);
+    assert.equal(await page.evaluate(()=>window.pasteXss||0),0);
+    console.log('PASS rich editing, shortcuts, undo, persistence, restore, safe paste and all delivery DOCX formats');
+
+    // Worker scans every completed pair; human selection is required before insertion.
+    await page.locator('#projSelect').selectOption('New Project');
+    await page.waitForFunction(()=>!document.querySelector('.seg-tgt'));
+    await page.evaluate(async n=>{
+      const p=await MiniCatDB.Projects.get(n);
+      p.segments=[['边缘计算降低延迟。','Edge computing reduces latency.'],['边缘计算改善带宽。','Edge computing improves bandwidth.'],['我们采用边缘计算。','We use edge computing.'],['边缘计算支持设备。','Edge computing supports devices.']].map(([src,tgt],i)=>({src,tgt,para:i}));
+      await MiniCatDB.Projects.put(p);
+    },oldName);
+    await page.locator('#projSelect').selectOption(oldName);
+    await page.waitForFunction(()=>document.querySelectorAll('.seg-tgt').length===4);
+    await page.locator('.side-tab[data-tab=terms]').click();
+    await page.locator('#btnTermExtract').click();
+    await page.waitForFunction(()=>document.querySelectorAll('.candidate-row').length>0).catch(async error=>{console.error('Candidate diagnostic:',await page.locator('#candidateStatus').textContent(),pageErrors);throw error;});
+    if (process.env.MINICAT_QA_DIR) await page.screenshot({path:path.join(process.env.MINICAT_QA_DIR,'term-candidates.png'),fullPage:true});
+    assert.equal(await page.locator('.candidate-accept:checked').count(),0);
+    const row=page.locator('.candidate-row').filter({has:page.locator('label',{hasText:'边缘计算'})}).first();
+    await row.locator('.candidate-en').fill('edge computing');
+    await row.locator('.candidate-accept').check();
+    await page.locator('#btnCandidateCommit').click();
+    await page.waitForFunction(()=>!document.querySelector('#dlgTermCandidates').open);
+    assert.equal(await page.evaluate(async n=>(await MiniCatDB.Terms.all(n)).filter(t=>t.zh==='边缘计算'&&t.en==='edge computing').length,oldName),1);
+    await page.locator('#btnTermExtract').click();
+    await page.waitForFunction(()=>document.querySelector('#candidateStatus').textContent.includes('待复核'));
+    assert.equal(await page.locator('.candidate-row label').filter({hasText:'边缘计算 ·'}).count(),0);
+    console.log('PASS local extraction, explicit human approval, term persistence and duplicate exclusion');
     assert.deepEqual(pageErrors, []);
     console.log('PASS ambiguous repeated paragraph is blocked; no browser errors');
   } finally {

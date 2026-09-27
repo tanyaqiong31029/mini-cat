@@ -2,7 +2,7 @@
  * ZIP container uses STORE (no compression) with proper CRC32 — valid OOXML that
  * Word/Excel open directly. Pairs with zip.js/msoffice.js for round-trip tests.
  *
- * buildDocx(blocks)  blocks: {type:'h1'|'p', text, italic?, gray?}
+ * buildDocx(blocks)  blocks: {type:'h1'|'p', text, runs?, italic?, gray?}
  *                    | {type:'table', header:[], rows:[[]]}
  * buildXlsx(sheets)  sheets: [{name, rows:[[cell,…],…]}]
  */
@@ -107,12 +107,32 @@
     let rpr = '';
     if (opts.bold) rpr += '<w:b/>';
     if (opts.italic) rpr += '<w:i/>';
+    if (opts.underline === true) rpr += '<w:u w:val="single"/>';
+    if (opts.superscript === true) rpr += '<w:vertAlign w:val="superscript"/>';
+    else if (opts.subscript === true) rpr += '<w:vertAlign w:val="subscript"/>';
     if (opts.gray) rpr += '<w:color w:val="595959"/>';
-    if (opts.size) rpr += `<w:sz w:val="${opts.size}"/><w:szCs w:val="${opts.size}"/>`;
-    return `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`;
+    if (Number.isInteger(opts.size) && opts.size > 0 && opts.size <= 1638) rpr += `<w:sz w:val="${opts.size}"/><w:szCs w:val="${opts.size}"/>`;
+    const content = String(text == null ? '' : text).split(/(\r\n|\r|\n|\t)/).map(part =>
+      /^(\r\n|\r|\n)$/.test(part) ? '<w:br/>' : part === '\t' ? '<w:tab/>' : `<w:t xml:space="preserve">${esc(part)}</w:t>`).join('');
+    return `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}${content}</w:r>`;
+  }
+  // Formatting is data, never markup. Ignore malformed/stale runs rather than
+  // replacing canonical text or allowing arbitrary OOXML properties through.
+  function runsXml(text, runs, defaults) {
+    const value = String(text == null ? '' : text);
+    if (!Array.isArray(runs) || !runs.length ||
+        !runs.every(r => r && typeof r === 'object' && typeof r.text === 'string') ||
+        runs.map(r => r.text).join('') !== value) return runXml(value, defaults);
+    return runs.map(r => {
+      const opts = Object.assign({}, defaults);
+      for (const key of ['bold', 'italic', 'underline', 'superscript', 'subscript']) {
+        if (typeof r[key] === 'boolean') opts[key] = r[key];
+      }
+      return runXml(r.text, opts);
+    }).join('');
   }
   function pXml(text, opts) {
-    return `<w:p>${runXml(text, opts)}</w:p>`;
+    return `<w:p>${runsXml(text, opts && opts.runs, opts)}</w:p>`;
   }
   function tableXml(header, rows) {
     const cols = Math.max(header.length, ...(rows.length ? rows.map(r => r.length) : [1]));
@@ -123,8 +143,11 @@
     let xml = `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>${borders}</w:tblBorders></w:tblPr><w:tblGrid>`;
     for (let i = 0; i < cols; i++) xml += '<w:gridCol w:w="2800"/>';
     xml += '</w:tblGrid>';
-    const cell = (text, isHead) =>
-      `<w:tc><w:tcPr><w:tcW w:w="2800" w:type="dxa"/></w:tcPr>${pXml(text, isHead ? { bold: true, size: 21 } : { size: 21 })}</w:tc>`;
+    const cell = (value, isHead) => {
+      const rich = value && typeof value === 'object' && !Array.isArray(value);
+      const opts = { bold: isHead, size: 21, runs: rich ? value.runs : undefined };
+      return `<w:tc><w:tcPr><w:tcW w:w="2800" w:type="dxa"/></w:tcPr>${pXml(rich ? value.text : value, opts)}</w:tc>`;
+    };
     xml += '<w:tr>' + header.map(h => cell(h, true)).join('') + '</w:tr>';
     for (const r of rows) {
       const cells = [];
@@ -170,9 +193,15 @@
     let body = '';
     for (const b of blocks) {
       let inner = '';
-      if (b.type === 'h1') inner = pXml(b.text, { bold: true, size: 32 });
-      else if (b.type === 'h2') inner = pXml(b.text, { bold: true, size: 26 });
+      if (b.type === 'h1') inner = pXml(b.text, { bold: true, size: 32, runs: b.runs });
+      else if (b.type === 'h2') inner = pXml(b.text, { bold: true, size: 26, runs: b.runs });
       else if (b.type === 'table') inner = tableXml(b.header, b.rows);
+      else if (b.type === 'trk' && b.previous && b.current) {
+        const attrs = `w:author="${esc(b.author || 'Mini-CAT')}" w:date="${esc(b.date || new Date().toISOString())}"`;
+        const oldRuns = runsXml(b.previous.text, b.previous.runs, {}).replace(/<w:t(\s|>)/g, '<w:delText$1').replace(/<\/w:t>/g, '</w:delText>');
+        const newRuns = runsXml(b.current.text, b.current.runs, {});
+        inner = `<w:p><w:del w:id="${idBase.n++}" ${attrs}>${oldRuns}</w:del><w:ins w:id="${idBase.n++}" ${attrs}>${newRuns}</w:ins></w:p>`;
+      }
       else if (b.type === 'trk') inner = '<w:p>' + trkXml(b.ops, b.author, b.date, idBase) + '</w:p>';
       else inner = pXml(b.text, b);
       const cmIds = Array.isArray(b.comments) ? b.comments.map(ci => comments[ci] ? comments[ci].id : null).filter(x => x !== null) : [];

@@ -1,0 +1,30 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {parseHTML}=require('linkedom');
+const RT=require('../js/richtext.js');
+let passed=0;
+function test(name,fn){fn();passed++;console.log('✓ '+name);}
+test('coalesces adjacent styles and ignores unknown fields',()=>assert.deepEqual(RT.normalize([{text:'a',bold:true,onclick:'bad'},{text:'b',bold:true}]),[{text:'ab',bold:true}]));
+test('stale formatting falls back to canonical text',()=>assert.deepEqual(RT.normalize([{text:'old',bold:true}],'new'),[{text:'new'}]));
+test('empty canonical text removes old runs',()=>assert.deepEqual(RT.normalize([{text:'old'}],''),[]));
+test('invalid input falls back safely',()=>assert.deepEqual(RT.normalize({html:'bad'},'plain'),[{text:'plain'}]));
+test('only boolean true activates marks',()=>assert.deepEqual(RT.normalize([{text:'x',bold:'true',italic:1}]),[{text:'x'}]));
+test('superscript and subscript exclusive',()=>assert.deepEqual(RT.normalize([{text:'x',superscript:true,subscript:true}]),[{text:'x',superscript:true}]));
+test('HTML safely escapes all text',()=>assert.equal(RT.toHTML([{text:'<img onerror="x">&\n',bold:true}]),'<strong>&lt;img onerror=&quot;x&quot;&gt;&amp;\n</strong>'));
+test('format only selected substring',()=>assert.deepEqual(RT.format([{text:'abcd'}],1,3,'bold'),[{text:'a'},{text:'bc',bold:true},{text:'d'}]));
+test('toggle removes full selected bold',()=>assert.deepEqual(RT.format([{text:'ab',bold:true}],0,2,'bold'),[{text:'ab'}]));
+test('mixed selection becomes all bold',()=>assert.deepEqual(RT.format([{text:'a',bold:true},{text:'b'}],0,2,'bold'),[{text:'ab',bold:true}]));
+test('clear selected marks only',()=>assert.deepEqual(RT.format([{text:'abc',bold:true,italic:true}],1,2,'clear'),[{text:'a',bold:true,italic:true},{text:'b'},{text:'c',bold:true,italic:true}]));
+test('subscript replaces superscript',()=>assert.deepEqual(RT.format([{text:'x',superscript:true}],0,1,'subscript'),[{text:'x',subscript:true}]));
+test('collapsed and unknown formats do nothing',()=>{assert.deepEqual(RT.format([{text:'x'}],0,0,'bold'),[{text:'x'}]);assert.deepEqual(RT.format([{text:'x'}],0,1,'html'),[{text:'x'}]);});
+function dom(html){return parseHTML('<div id="editor">'+html+'</div>').document.getElementById('editor');}
+test('DOM extracts nested marks',()=>assert.deepEqual(RT.fromDOM(dom('<b>a<i>b</i></b>')).runs,[{text:'a',bold:true},{text:'b',bold:true,italic:true}]));
+test('DOM discards scripts, attributes and styles',()=>{const result=RT.fromDOM(dom('<script>alert(1)</script><img src=x onerror=x><span style="font-weight:bold" onclick=x>safe</span>'));assert.deepEqual(result,{text:'safe',runs:[{text:'safe'}]});});
+test('DOM handles native editable block breaks',()=>assert.equal(RT.fromDOM(dom('a<div>b</div><div>c</div>')).text,'a\nb\nc'));
+test('DOM keeps explicit blank lines',()=>assert.equal(RT.fromDOM(dom('a<br><br>b')).text,'a\n\nb'));
+test('native Enter placeholder does not add an extra newline',()=>assert.equal(RT.fromDOM(dom('a<div><br></div>')).text,'a\n'));
+test('native consecutive empty lines are retained',()=>assert.equal(RT.fromDOM(dom('a<div><br></div><div><br></div>')).text,'a\n\n'));
+test('empty editable placeholder is empty',()=>assert.equal(RT.fromDOM(dom('<br>')).text,''));
+test('newline-only stored content round trips',()=>assert.equal(RT.fromDOM(dom(RT.toHTML([{text:'\n'}]))).text,'\n'));
+test('safe rendered runs round trip',()=>{const runs=[{text:'中<&\n',bold:true,italic:true},{text:'文',underline:true,subscript:true}];assert.deepEqual(RT.fromDOM(dom(RT.toHTML(runs))).runs,runs);});
+console.log(passed+' rich text tests passed');

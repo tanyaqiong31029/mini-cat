@@ -4,6 +4,8 @@
   'use strict';
   const Core = (typeof module !== 'undefined' && module.exports)
     ? require('./core.js') : root.MiniCatCore;
+  const RichText = (typeof module !== 'undefined' && module.exports)
+    ? require('./richtext.js') : root.MiniCatRichText;
 
   /* ---------- text decoding ---------- */
 
@@ -288,6 +290,8 @@
     const segMap = (sg) => ({
       src: sg.src.slice(0, 20000),
       tgt: typeof sg.tgt === 'string' ? sg.tgt.slice(0, 20000) : '',
+      // Formatting is structured data only; canonical plain text always wins.
+      tgtRuns: RichText.normalize(sg.tgtRuns, cap(sg.tgt, 20000)),
       status: sg.status === 'translated' ? 'translated' : 'untranslated',
       para: Number.isFinite(sg.para) ? sg.para : null,
       bestScore: int01(sg.bestScore),
@@ -299,6 +303,7 @@
       revisions: Array.isArray(sg.revisions)
         ? sg.revisions.slice(0, 20).filter(r => r && typeof r === 'object' && typeof r.text === 'string').map(r => ({
             v: cap(r.v, 20), author: cap(r.author, 120), text: r.text.slice(0, 20000),
+            runs: RichText.normalize(r.runs, r.text.slice(0, 20000)),
             date: cap(r.date, 30), note: cap(r.note, 1000)
           }))
         : [],
