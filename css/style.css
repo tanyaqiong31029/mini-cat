@@ -182,3 +182,22 @@ legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
   main { flex-direction: column; }
   #sidebar { width: auto; border-left: none; border-top: 1px solid var(--line); max-height: 40vh; }
 }
+
+/* 联网查阅 */
+.webref-opt { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.webref-status { font-size: 12px; color: var(--celadon-dark); margin-top: 6px; }
+.src-card { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; font-size: 13px; }
+.src-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.src-badge { font-size: 11px; background: var(--celadon-light); color: var(--celadon-dark); border-radius: 999px; padding: 1px 8px; }
+.src-badge.fail { background: #f6e3e0; color: var(--red); }
+.hit-row { border-top: 1px dotted var(--line); padding: 5px 0; }
+.hit-title { color: var(--celadon-dark); text-decoration: none; font-weight: 600; font-size: 13px; }
+.hit-title:hover { text-decoration: underline; }
+.adopt-btns { margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+.webref-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.webref-links a {
+  font-size: 12px; color: var(--celadon-dark); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: #fff;
+}
+.webref-links a:hover { border-color: var(--celadon); }
+.compliance-note { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }

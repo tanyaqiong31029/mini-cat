@@ -24,6 +24,7 @@ js/db.js            IndexedDB 封装：tm / terms / projects / meta 四个 store
 js/zip.js           极简 ZIP 读取器（central directory + DecompressionStream('deflate-raw')），零依赖
 js/msoffice.js      .xlsx（sharedStrings/inlineStr）与 .docx（段落+表格，命名空间无关解析）提取
 js/officewrite.js   .docx/.xlsx 生成器：ZIP store 容器（CRC32）+ 最小 OOXML（无边框表格补 tblBorders；xlsx inlineStr/数字单元格）
+js/webref.js        联网查阅：MediaWiki action API（origin=*）、Met Museum 开放 API、Internet Archive advancedsearch；全部带超时与降级（失败→权威站点直达链接）
 js/io.js            文件格式：TMX 1.4、TBX-Basic、CSV/TSV（BOM+GBK 回退）、JSONL、粘贴对齐、备份
 js/app.js           状态管理、事件、渲染、批量匹配调度
 tests/              Node 单元测试（core+io 纯函数）与规模基准
@@ -94,6 +95,12 @@ termbase/*.tbx|csv              ──导入──▶ 术语库（2026最终译�
 | 句句对照表格 | docx / xlsx / csv | 「序号｜中文｜英文」三列表格（docx 带 tblBorders 网格线），与 Evolis 类交付件、平行语料构建同构 |
 
 docx/xlsx 生成走 ZIP store（无压缩）+ 标准 CRC32，最小 OOXML 部件集（Content Types / rels / document.xml·workbook.xml），Word 与 Excel 直接打开；与 msoffice.js 读取器构成 round-trip 测试闭环。
+
+## 联网术语查阅与合规边界
+
+多源聚合：中文/英文维基百科（MediaWiki `list=search`，`origin=*` 跨域）、大都会艺术博物馆开放 API（英文藏名 = 机构背书的"推荐译名"证据，`isHighlight` 藏品优先）、Internet Archive 书目检索。无 CORS 的权威库（术语在线、故宫数字文物库等）以 Bing `site:` 定向直达链接兜底——中国网络环境下抓取失败仅影响对应卡片，不产生空屏。
+
+**合规设计**（对应国社科申报"译文须译者本人完成"）：本模块只做"查阅与参考"，不调用任何生成式翻译；候选译名写入术语库必须人工点击，并自动标注 `[人工采纳译名·来源 日期]` 溯源；工作台译文列永不自动填充网络内容。
 
 ## 端侧 MT 建议
 

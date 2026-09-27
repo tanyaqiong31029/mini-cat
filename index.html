@@ -48,6 +48,7 @@
       <button class="side-tab on" data-tab="match">记忆匹配</button>
       <button class="side-tab" data-tab="terms">术语库</button>
       <button class="side-tab" data-tab="concord">语料检索</button>
+      <button class="side-tab" data-tab="webref">联网查阅</button>
     </div>
 
     <div class="side-pane" data-pane="match">
@@ -65,6 +66,15 @@
     <div class="side-pane" data-pane="concord" style="display:none">
       <div class="pane-head"><input id="concordInput" type="search" placeholder="在记忆库中检索（中英皆可）…"></div>
       <div id="concordList" class="pane-body"></div>
+    </div>
+
+    <div class="side-pane" data-pane="webref" style="display:none">
+      <div class="pane-head">
+        <input id="webrefInput" type="search" placeholder="输入中文术语或英文关键词…">
+        <label class="webref-opt"><input type="checkbox" id="webrefEn" checked> 同时查英文用法</label>
+        <div id="webrefStatus" class="webref-status"></div>
+      </div>
+      <div id="webrefList" class="pane-body"><div class="empty">输入关键词后自动抓取多源参考；或用下方直达链接。</div></div>
     </div>
   </aside>
 </main>
@@ -172,12 +182,13 @@
   </form>
 </dialog>
 
-<script src="js/core.js?v=1.2"></script>
-<script src="js/db.js?v=1.2"></script>
-<script src="js/zip.js?v=1.2"></script>
-<script src="js/msoffice.js?v=1.2"></script>
-<script src="js/io.js?v=1.2"></script>
-<script src="js/officewrite.js?v=1.2"></script>
-<script src="js/app.js?v=1.2"></script>
+<script src="js/core.js?v=1.3"></script>
+<script src="js/db.js?v=1.3"></script>
+<script src="js/zip.js?v=1.3"></script>
+<script src="js/msoffice.js?v=1.3"></script>
+<script src="js/io.js?v=1.3"></script>
+<script src="js/officewrite.js?v=1.3"></script>
+<script src="js/webref.js?v=1.3"></script>
+<script src="js/app.js?v=1.3"></script>
 </body>
 </html>

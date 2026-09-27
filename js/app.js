@@ -1,7 +1,7 @@
 /* Mini-CAT application: UI wiring, workspace state, matching pipeline. */
 (function () {
   'use strict';
-  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice, Write = window.MiniCatWrite;
+  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice, Write = window.MiniCatWrite, Web = window.MiniCatWebRef;
   const $ = sel => document.querySelector(sel);
   const $$ = sel => [...document.querySelectorAll(sel)];
   const esc = Core.escapeHtml;
@@ -302,7 +302,8 @@
       !q || t.zh.toLowerCase().includes(q) || (t.en || '').toLowerCase().includes(q));
     $('#termList').innerHTML = list.map(t => `
       <div class="term-row" data-id="${t.id}">
-        <div class="term-pair"><b>${esc(t.zh)}</b><span class="arrow">→</span><span class="en">${esc(t.en || '<待译>')}</span></div>
+        <div class="term-pair"><b>${esc(t.zh)}</b><span class="arrow">→</span><span class="en">${esc(t.en || '<待译>')}</span>
+          <button class="linkbtn webref-go" data-id="${t.id}" title="联网查阅该术语">🌐</button></div>
         ${t.note ? `<div class="term-note">${esc(t.note)}</div>` : ''}
       </div>`).join('') || '<div class="empty">术语库为空。</div>';
   }
@@ -415,7 +416,94 @@
     state.switchSide = switchSide;
 
     $('#termSearch').oninput = renderTerms;
+    $('#termList').addEventListener('click', e => {
+      const btn = e.target.closest('.webref-go');
+      if (!btn) return;
+      const term = state.terms.find(t => String(t.id) === String(btn.dataset.id));
+      if (!term) return;
+      state.webrefTerm = term;
+      $('#webrefInput').value = term.zh;
+      switchSide('webref');
+      runWebRef();
+    });
     $('#concordInput').oninput = e => runConcordance(e.target.value.trim());
+
+    /* ---- 联网查阅（多源参考；译文列绝不自动写入，采纳须人工点击） ---- */
+    function webrefRender(data, keyword) {
+      const box = $('#webrefList');
+      const term = state.webrefTerm;
+      let h = '';
+      for (const g of data.results) {
+        const badge = g.error
+          ? `<span class="src-badge fail">无法访问</span>`
+          : `<span class="src-badge">${g.hits.length} 条</span>`;
+        h += `<div class="src-card"><div class="src-head"><b>${esc(g.source)}</b>${badge}</div>`;
+        if (g.error) h += `<div class="term-note">网络受限或超时——请用下方直达链接。</div>`;
+        for (const hit of g.hits.slice(0, 5)) {
+          const meta = [hit.date, hit.culture, hit.medium, hit.year && (hit.year + '年'), hit.creator, hit.highlight ? '⭐ 馆方高亮藏品' : '']
+            .filter(Boolean).map(x => esc(String(x))).join(' · ');
+          const enish = typeof hit.title === 'string' ? hit.title : '';
+          h += `<div class="hit-row">
+            <a class="hit-title" href="${esc(hit.url)}" target="_blank" rel="noopener noreferrer">${esc(hit.title)}</a>
+            ${hit.snippet ? `<div class="term-note">${esc(hit.snippet.slice(0, 160))}</div>` : ''}
+            ${meta ? `<div class="term-note">${meta}</div>` : ''}
+            ${term ? `<div class="adopt-btns">
+              <button class="linkbtn adopt-note" data-src="${esc(g.source)}" data-text="${esc((hit.snippet || hit.medium || hit.title || '').slice(0, 200))}">引用到备注</button>
+              ${/metmuseum|Wikipedia/i.test(g.source) && enish ? `<button class="linkbtn adopt-en" data-src="${esc(g.source)}" data-en="${esc(enish)}">设为英文译法（人工确认）</button>` : ''}
+            </div>` : ''}
+          </div>`;
+        }
+        h += `</div>`;
+      }
+      h += `<div class="src-card"><div class="src-head"><b>权威直达链接</b></div><div class="webref-links">` +
+        data.links.map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" title="${esc(l.note || '')}">${esc(l.name)}</a>`).join('') +
+        `</div></div>`;
+      h += `<div class="term-note compliance-note">⚠️ 查阅结果仅作翻译参考。依据国社科申报要求，工具不会自动生成或写入译文；英文译法须经你人工确认后点击「设为英文译法」才会记入术语库，并注明来源与日期。</div>`;
+      box.innerHTML = h;
+    }
+
+    async function runWebRef() {
+      const kw = ($('#webrefInput').value || '').trim();
+      const status = $('#webrefStatus');
+      if (!kw) { $('#webrefList').innerHTML = '<div class="empty">输入关键词后自动抓取多源参考。</div>'; return; }
+      const term = state.webrefTerm;
+      const isCJK = /[一-鿿]/.test(kw);
+      const zhTerm = isCJK ? kw : (term ? term.zh : '');
+      let enTerm = !isCJK ? kw : (($('#webrefEn').checked && term && term.en) ? term.en : '');
+      status.textContent = '正在抓取：维基百科 / 大都会博物馆 / 书目…';
+      try {
+        const data = await Web.lookupAll(zhTerm, enTerm, { met: !!enTerm, archive: !!enTerm });
+        status.textContent = '';
+        webrefRender(data, kw);
+      } catch (err) {
+        status.textContent = '';
+        $('#webrefList').innerHTML = `<div class="empty">抓取失败：${esc(err.message || '')}。请使用直达链接。</div>`;
+      }
+    }
+    $('#webrefInput').addEventListener('keydown', e => { if (e.key === 'Enter') runWebRef(); });
+    $('#webrefEn').addEventListener('change', runWebRef);
+
+    $('#webrefList').addEventListener('click', async e => {
+      const noteBtn = e.target.closest('.adopt-note');
+      const enBtn = e.target.closest('.adopt-en');
+      if (!noteBtn && !enBtn) return;
+      const term = state.webrefTerm;
+      if (!term) { alert('请先从术语库点 🌐 进入查阅，再采纳。'); return; }
+      const fresh = (await DB.Terms.all(state.project)).find(t2 => String(t2.id) === String(term.id));
+      if (!fresh) { alert('术语已不存在。'); return; }
+      const stamp = today();
+      if (enBtn) {
+        fresh.en = enBtn.dataset.en;
+        fresh.note = (fresh.note ? fresh.note + '｜' : '') + `[人工采纳译名·${enBtn.dataset.src} ${stamp}]`;
+      } else {
+        fresh.note = (fresh.note ? fresh.note + '｜' : '') + `[网络参考·${noteBtn.dataset.src} ${stamp}] ${noteBtn.dataset.text}`;
+      }
+      await DB.Terms.addMany([fresh]);
+      state.terms = await DB.Terms.all(state.project);
+      await renderTerms();
+      renderSegments();
+      log(`术语「${fresh.zh}」${enBtn ? '英文译名已人工采纳' : '备注已引用网络来源'}。`);
+    });
 
     // toolbar
     $('#btnImportSource').onclick = () => $('#dlgSource').showModal();
