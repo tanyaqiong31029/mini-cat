@@ -575,8 +575,11 @@
     // toolbar
     $('#btnImportSource').onclick = () => $('#dlgSource').showModal();
     $('#btnImportRevision').onclick = async () => {
-      $('#revAuthor').value = state.author || '';
-      $('#revPreview').innerHTML = '<div class="empty">选择文件后自动与当前项目句段匹配。</div>';
+      // 修订人/版本留空 = 自动识别（Word 修订署名/文件属性 + 自动编号），避免上次输入残留
+      $('#revAuthor').value = '';
+      $('#revLabel').value = '';
+      $('#revFile').value = '';
+      $('#revPreview').innerHTML = '<div class="empty">选择文件后自动与当前项目句段匹配；修订人与日期将从 Word 修订记录/文件属性自动识别。</div>';
       $('#btnRevCommit').disabled = true;
       $('#dlgRevision').showModal();
     };
@@ -1009,13 +1012,34 @@
     function revParsePairs(f) {
       return Promise.resolve().then(async () => {
         if (/\.docx$/i.test(f.name)) {
-          const { paragraphs, tables } = await Office.docxToBlocks(await f.arrayBuffer());
-          const t = tables.find(t2 => t2.rows.length >= 2 && t2.rows[0].length >= 2);
+          const parsed = await Office.docxToBlocks(await f.arrayBuffer());
+          const t = parsed.tables.find(t2 => t2.rows.length >= 1 && t2.rows[0].length >= 2);
           if (t) {
-            const sniff = Office.sniffDocxTable(t.rows);
-            if (sniff) return { pairs: t.rows.slice(1).map(r => ({ zh: r[sniff.srcCol] || '', en: r[sniff.tgtCol] || '' })), note: 'docx 表格' };
+            // 首行若本身携带 Word 修订标记，则它是数据行而非表头
+            const firstRowTracked = (t.rowTracked || []).some(x => x.row === 0);
+            const header = firstRowTracked ? t.rows[0].map((_, i2) => '列' + (i2 + 1)) : t.rows[0].map(c2 => String(c2 || '').trim());
+            const dataRows = firstRowTracked ? t.rows : t.rows.slice(1);
+            const sniff = Office.sniffDocxTable([header, ...dataRows.slice(0, 10)]);
+            if (sniff) {
+              const pairs = [], comments = [];
+              dataRows.forEach((r, ri) => {
+                const zh = String(r[sniff.srcCol] || ''), en = String(r[sniff.tgtCol] || '');
+                if (!zh.trim() && !en.trim()) return;
+                // 自动识别：Word 修订模式携带的修订人与时间
+                const trk = (t.rowTracked || []).find(x => x.row === (firstRowTracked ? ri : ri + 1) && x.col === sniff.tgtCol);
+                pairs.push({ zh, en, author: trk ? trk.author : undefined, date: trk ? trk.date : undefined });
+                // 自动识别：Word 批注（导师/专家意见）
+                (t.rowComments || []).filter(rc => rc.row === (firstRowTracked ? ri : ri + 1) && rc.col === sniff.tgtCol).forEach(rc => {
+                  rc.ids.forEach(id => {
+                    const c2 = (parsed.comments || []).find(cc => String(cc.id) === String(id));
+                    if (c2 && c2.text) comments.push({ zh, author: c2.author, date: c2.date, text: c2.text });
+                  });
+                });
+              });
+              return { pairs, comments, meta: parsed.meta, note: 'docx 表格' };
+            }
           }
-          return { pairs: paragraphs.filter(Boolean).map(p => ({ zh: p, en: '' })), note: 'docx 段落（仅原文）' };
+          return { pairs: parsed.paragraphs.filter(Boolean).map(p => ({ zh: p, en: '' })), comments: [], meta: parsed.meta, note: 'docx 段落（仅原文）' };
         }
         if (/\.xlsx$/i.test(f.name)) {
           const sheets = await Office.xlsxToSheets(await f.arrayBuffer());
@@ -1043,7 +1067,7 @@
       const f = $('#revFile').files[0]; if (!f) return;
       $('#revPreview').innerHTML = '<div class="empty">解析并匹配中…</div>';
       try {
-        const { pairs, note } = await revParsePairs(f);
+        const { pairs, note, comments, meta } = await revParsePairs(f);
         const norm = Core.normalizeCJK;
         const bySrc = new Map();
         state.segments.forEach((seg, i) => {
@@ -1059,15 +1083,20 @@
           if (idx >= 0) {
             matched++;
             const seg = state.segments[idx];
-            if (!Diff.sameText(seg.tgt, p.en)) { revised++; plan.push({ kind: 'rev', idx, en: p.en.trim() }); }
+            if (!Diff.sameText(seg.tgt, p.en)) { revised++; plan.push({ kind: 'rev', idx, en: p.en.trim(), pair: p }); }
             else unchanged++;
-          } else { fresh++; plan.push({ kind: 'new', zh: p.zh, en: p.en.trim() }); }
+          } else { fresh++; plan.push({ kind: 'new', zh: p.zh, en: p.en.trim(), pair: p }); }
         }
         const author = ($('#revAuthor').value || '').trim();
         const label = ($('#revLabel').value || '').trim();
-        revPending = { plan, author, label, sourceFile: f.name };
+        const autoAuthors = [...new Set(pairs.filter(p2 => p2.author).map(p2 => p2.author))];
+        const metaLine = meta && meta.lastModifiedBy ? `｜文件属性：最后修改人 ${esc(meta.lastModifiedBy)}` : '';
+        revPending = { plan, author, label, sourceFile: f.name, comments: comments || [], meta: meta || {} };
         $('#revPreview').innerHTML = `<div class="mapping-note">来源：${esc(note)}｜共 ${plan.length + unchanged} 对。` +
-          `匹配 <b>${matched}</b>，其中 <b style="color:var(--celadon-dark)">有修订 ${revised}</b>，无变化 ${unchanged}；未匹配将新增 <b>${fresh}</b> 段。</div>` +
+          `匹配 <b>${matched}</b>，其中 <b style="color:var(--celadon-dark)">有修订 ${revised}</b>，无变化 ${unchanged}；未匹配将新增 <b>${fresh}</b> 段。` +
+          (autoAuthors.length ? `｜<b>自动识别修订人</b>：${esc(autoAuthors.join('、'))}（来自 Word 修订记录）` : '') +
+          (comments && comments.length ? `｜<b>检测到 Word 批注 ${comments.length} 条</b>（将导入批注模块）` : '') +
+          `${metaLine}</div>` +
           plan.filter(p2 => p2.kind === 'rev').slice(0, 4).map(p2 => {
             const seg = state.segments[p2.idx];
             const ops = Diff.diffWords(seg.tgt || '', p2.en);
@@ -1081,12 +1110,15 @@
 
     $('#btnRevCommit').onclick = async () => {
       if (!revPending) return;
-      const { plan } = revPending;
-      // 修订人与版本标签在提交时实时读取（预览时可能还未填写）
-      const author = ($('#revAuthor').value || '').trim() || '审校';
+      const { plan, comments, meta } = revPending;
+      const manualAuthor = ($('#revAuthor').value || '').trim();
       const label = ($('#revLabel').value || '').trim();
-      const date = new Date().toISOString().slice(0, 10);
-      let revN = 0, newN = 0;
+      const today = new Date().toISOString().slice(0, 10);
+      const metaDate = meta && meta.modified ? String(meta.modified).slice(0, 10) : '';
+      // 作者/日期自动识别链：Word 修订记录 > 文件属性 > 手动输入 > 未署名
+      const resolveAuthor = (pair) => (pair && pair.author) || manualAuthor || (meta && meta.lastModifiedBy) || '未署名';
+      const resolveDate = (pair) => (pair && pair.date ? String(pair.date).slice(0, 10) : '') || metaDate || today;
+      let revN = 0, newN = 0, cmtN = 0;
       let paraBase = state.segments.length ? (state.segments[state.segments.length - 1].para ?? -1) + 1 : 0;
       for (const p of plan) {
         if (p.kind === 'rev') {
@@ -1095,7 +1127,7 @@
           const last = seg.revisions[seg.revisions.length - 1];
           const v = label || ('V' + (seg.revisions.length + 1));
           if (!last || !Diff.sameText(last.text, p.en)) {
-            seg.revisions.push({ v, author: author || '审校', text: p.en, date });
+            seg.revisions.push({ v, author: resolveAuthor(p.pair || p), text: p.en, date: resolveDate(p.pair || p) });
           }
           seg.tgt = p.en;
           seg.status = 'translated';
@@ -1103,18 +1135,36 @@
           revN++;
         } else {
           const norm = Core.normalizeCJK(p.zh);
-          const revs = [{ v: label || 'V1', author: author || '译者', text: p.en, date }];
+          const a = resolveAuthor(p.pair || p);
+          const revs = [{ v: label || 'V1', author: manualAuthor || a, text: p.en, date: resolveDate(p.pair || p) }];
           state.segments.push({
             src: p.zh, tgt: p.en, status: 'translated', para: paraBase++,
-            bestScore: 0, matches: [], revisions: revs, author: author || '译者',
+            bestScore: 0, matches: [], revisions: revs, author: manualAuthor || a,
             key0: norm + '@R' + newN
           });
           newN++;
         }
       }
+      // Word 批注 → 批注模块（按中文原文匹配；去重）
+      const cmts = comments || [];
+      const segBySrc = new Map();
+      state.segments.forEach((seg, i) => {
+        const k = Core.normalizeCJK(seg.src);
+        if (!segBySrc.has(k)) segBySrc.set(k, i);
+      });
+      for (const c2 of cmts) {
+        const k = Core.normalizeCJK(c2.zh);
+        const idx = segBySrc.get(k);
+        if (idx == null) continue;
+        const seg = state.segments[idx];
+        if (!Array.isArray(seg.comments)) seg.comments = [];
+        if (seg.comments.some(x2 => x2.text === c2.text && x2.author === c2.author)) continue;
+        seg.comments.push({ author: c2.author || '批注', text: c2.text, date: String(c2.date || '').slice(0, 10) || today });
+        cmtN++;
+      }
       $('#dlgRevision').close();
       await saveProjectNow();
-      log(`修订导入完成：修订 ${revN} 段、新增 ${newN} 段（修订人：${author || '未署名'}）。`);
+      log(`修订导入完成：修订 ${revN} 段、新增 ${newN} 段、导入批注 ${cmtN} 条。`);
       await rematchAll();
       await saveProjectNow();
     };

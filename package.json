@@ -1,0 +1,12 @@
+{
+  "name": "mini-cat",
+  "version": "1.6.0",
+  "private": true,
+  "description": "轻量网页版翻译记忆 CAT 工具（零运行时依赖；linkedom 仅测试环境使用）",
+  "scripts": {
+    "test": "node tests/core.test.js && node tests/msoffice.test.js && node tests/diff.test.js && node tests/tracked.test.js && node tests/officewrite.test.js && node tests/restore.test.js && node tests/webref.test.js && node tests/bench.js"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.0"
+  }
+}

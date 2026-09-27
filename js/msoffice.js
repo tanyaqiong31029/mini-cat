@@ -11,9 +11,39 @@
 })(typeof self !== 'undefined' ? self : this, function (Zip) {
   'use strict';
 
+  /* XML 解析器可注入：浏览器用内置 DOMParser；Node 测试经 setXmlParser(linkedom) 注入 */
+  let customParser = null;
+  function setXmlParser(p) { customParser = p; }
+  /* 命名空间兼容：浏览器 localName 无前缀；linkedom（测试）为 "w:body" 形式 */
+  function local(el) {
+    const n = (el && el.localName) || '';
+    return n.includes(':') ? n.slice(n.indexOf(':') + 1) : n;
+  }
+  /* 按 localName 取后代元素；NS 查询不可用时（linkedom）降级为手动扫描 */
+  function byTag(root, name) {
+    if (typeof root.getElementsByTagNameNS === 'function') {
+      const r = root.getElementsByTagNameNS('*', name);
+      if (r && r.length) return r;
+    }
+    const out = [];
+    const walk = (n) => {
+      for (const c of (n.children || [])) {
+        if (local(c) === name) out.push(c);
+        walk(c);
+      }
+    };
+    walk(root);
+    return out;
+  }
+
   function parseXml(text) {
-    const doc = new DOMParser().parseFromString(text, 'application/xml');
-    if (doc.querySelector('parsererror')) throw new Error('Office XML 解析失败');
+    const DP = customParser || (typeof DOMParser !== 'undefined' ? DOMParser : null);
+    if (!DP) throw new Error('当前环境缺少 XML 解析器');
+    const doc = new DP().parseFromString(text, 'application/xml');
+    if (typeof doc.querySelector === 'function') {
+      const pe = doc.querySelector('parsererror');
+      if (pe) throw new Error('Office XML 解析失败');
+    }
     return doc;
   }
 
@@ -96,39 +126,105 @@
 
   function paraText(p) {
     let s = '';
-    Array.from(p.getElementsByTagNameNS('*', 't')).forEach(t => { s += t.textContent; });
+    Array.from(byTag(p, 't')).forEach(t => { s += t.textContent; });
     return s.replace(/\u00a0/g, ' ');
+  }
+
+  /* 修订感知提取：final = 含 w:ins 的当前文本；original = 删除标记还原的修订前文本；
+   * changes = 该段内 w:ins/w:del 的作者与时间（Word 修订模式自动署名）；
+   * cmtIds = 段内 Word 批注锚点。 */
+  function paraParts(p) {
+    let final = '', original = '';
+    const changes = new Map();
+    Array.from(byTag(p, 't')).forEach(t => {
+      final += t.textContent;
+      let n = t.parentNode, inIns = false;
+      while (n && n !== p) { if (local(n) === 'ins') { inIns = true; break; } n = n.parentNode; }
+      if (!inIns) original += t.textContent;
+    });
+    Array.from(byTag(p, 'delText')).forEach(d => { original += d.textContent; });
+    Array.from(byTag(p, 'ins')).concat(Array.from(byTag(p, 'del'))).forEach(el => {
+      const key = (el.getAttribute('w:author') || '') + '|' + (el.getAttribute('w:date') || '');
+      if (!changes.has(key)) changes.set(key, { author: el.getAttribute('w:author') || '', date: el.getAttribute('w:date') || '' });
+    });
+    const cmtIds = Array.from(byTag(p, 'commentRangeStart')).map(c2 => c2.getAttribute('w:id'));
+    return {
+      final: final.replace(/\u00a0/g, ' '),
+      original: original.replace(/\u00a0/g, ' '),
+      changes: [...changes.values()],
+      cmtIds
+    };
   }
 
   async function docxToBlocks(buf) {
     const xml = await Zip.extractText(buf, 'word/document.xml');
     const doc = parseXml(xml);
     // OOXML elements are namespaced (w:p, w:tbl…) — match by local name only
-    const body = doc.getElementsByTagNameNS('*', 'body')[0] || doc.documentElement;
+    const body = byTag(doc, 'body')[0] || doc.documentElement;
     const paragraphs = [];
     const tables = [];
     for (const node of Array.from(body.children)) {
-      const tag = node.localName;
+      const tag = local(node);
       if (tag === 'p') {
         paragraphs.push(paraText(node));
       } else if (tag === 'tbl') {
         const rows = [];
-        Array.from(node.getElementsByTagNameNS('*', 'tr')).forEach(tr => {
+        const rowTracked = [];   // [{row, col, author, date, original, final}] — Word 修订模式
+        const rowComments = [];  // [{row, col, ids}]        — Word 批注锚点
+        let rowIdx = 0;
+        Array.from(byTag(node, 'tr')).forEach(tr => {
           const cells = [];
-          Array.from(tr.getElementsByTagNameNS('*', 'tc')).forEach(tc => {
+          let colIdx = 0;
+          Array.from(byTag(tr, 'tc')).forEach(tc => {
             const parts = [];
-            Array.from(tc.getElementsByTagNameNS('*', 'p')).forEach(p => {
-              const t = paraText(p).trim();
+            const cellTracked = [];
+            const cellCmtIds = [];
+            Array.from(byTag(tc, 'p')).forEach(p => {
+              const pp = paraParts(p);
+              const t = pp.final.trim();
               if (t) parts.push(t);
+              if (pp.original.trim() && pp.original.trim() !== pp.final.trim()) {
+                for (const ch of pp.changes) {
+                  cellTracked.push({ col: colIdx, author: ch.author, date: ch.date, original: pp.original.trim(), final: pp.final.trim() });
+                }
+              }
+              cellCmtIds.push(...pp.cmtIds);
             });
             cells.push(parts.join('\n'));
+            for (const ct of cellTracked) rowTracked.push({ row: rowIdx, ...ct });
+            if (cellCmtIds.length) rowComments.push({ row: rowIdx, col: colIdx, ids: cellCmtIds });
+            colIdx++;
           });
           rows.push(cells);
+          rowIdx++;
         });
-        if (rows.length) tables.push({ rows });
+        if (rows.length) tables.push({ rows, rowTracked, rowComments });
       }
     }
-    return { paragraphs, tables };
+    // Word 批注内容（comments.xml）
+    let comments = [];
+    if (await Zip.list(buf).then(n => n.includes('word/comments.xml')).catch(() => false)) {
+      const cdoc = parseXml(await Zip.extractText(buf, 'word/comments.xml'));
+      Array.from(byTag(cdoc, 'comment')).forEach(c2 => {
+        comments.push({
+          id: c2.getAttribute('w:id'),
+          author: c2.getAttribute('w:author') || '',
+          date: c2.getAttribute('w:date') || '',
+          text: paraText(c2).trim()
+        });
+      });
+    }
+    // 文件属性：最后修改人/时间（docProps/core.xml）
+    let meta = {};
+    if (await Zip.list(buf).then(n => n.includes('docProps/core.xml')).catch(() => false)) {
+      try {
+        const core = parseXml(await Zip.extractText(buf, 'docProps/core.xml'));
+        const lastBy = byTag(core, 'lastModifiedBy')[0];
+        const modified = byTag(core, 'modified')[0];
+        meta = { lastModifiedBy: lastBy ? lastBy.textContent : '', modified: modified ? modified.textContent : '' };
+      } catch (e) { /* 属性缺失不影响主流程 */ }
+    }
+    return { paragraphs, tables, comments, meta };
   }
 
   /* Heuristic: does a string look like Chinese (majority CJK)? */
@@ -228,5 +324,5 @@
     return null;
   }
 
-  return { xlsxToSheets, docxToBlocks, sniffDocxTable, sniffDocxParagraphs, isCJK };
+  return { setXmlParser, xlsxToSheets, docxToBlocks, sniffDocxTable, sniffDocxParagraphs, isCJK };
 });
