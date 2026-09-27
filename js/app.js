@@ -15,6 +15,7 @@
     terms: [],         // [{id, project, zh, en, note, status, pos, subject}]
     segments: [],      // [{src, tgt, status, bestScore, bestTgt, bestNote, matches}]
     filter: 'all',
+    webrefRequest: 0,
     busy: false
   };
 
@@ -41,16 +42,23 @@
   async function createProject(name, silent) {
     name = name.trim();
     if (!name) return;
-    if (!state.projects.includes(name)) {
-      await DB.Projects.put({ name, created: new Date().toISOString().slice(0, 10) });
-      state.projects.push(name);
-    }
-    state.project = name;
-    await DB.Meta.set('activeProject', name);
-    if (!silent) await refreshAll();
+    await withWorkspaceLocked(async () => {
+      if (state.project) await saveProjectNow();
+      if (!state.projects.includes(name)) {
+        await DB.Projects.put({ name, created: new Date().toISOString().slice(0, 10) });
+        state.projects.push(name);
+      }
+      state.project = name;
+      await DB.Meta.set('activeProject', name);
+      if (!silent) await refreshAll();
+    });
   }
 
   async function refreshAll() {
+    state.webrefRequest++;
+    state.webrefTerm = null;
+    $('#webrefList').innerHTML = '<div class="empty">输入关键词后按回车查阅。</div>';
+    $('#webrefStatus').textContent = '';
     $('#projSelect').innerHTML = state.projects.map(p =>
       `<option value="${esc(p)}" ${p === state.project ? 'selected' : ''}>${esc(p)}</option>`).join('');
     state.tm = await DB.TM.all(state.project);
@@ -202,15 +210,32 @@
   /* ---------------- persistence ---------------- */
 
   let saveTimer = null;
+  let saveQueue = Promise.resolve();
+  let workspaceLocks = 0;
+  async function withWorkspaceLocked(action) {
+    workspaceLocks++;
+    document.body.inert = true;
+    try { return await action(); }
+    finally { document.body.inert = --workspaceLocks > 0; }
+  }
   function saveProjectDebounced() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveProjectNow, 600);
+    saveTimer = setTimeout(() => saveProjectNow().catch(() => log('保存失败，请备份并重试。')), 600);
   }
-  async function saveProjectNow() {
-    const proj = await DB.Projects.get(state.project) || { name: state.project };
-    proj.segments = state.segments;
-    proj.updated = new Date().toISOString();
-    await DB.Projects.put(proj);
+  function saveProjectNow() {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    if (!state.project) return saveQueue;
+    // Capture before awaiting: a later project switch/edit must not change this write.
+    const name = state.project;
+    const segments = structuredClone(state.segments);
+    const updated = new Date().toISOString();
+    const pending = saveQueue.catch(() => {}).then(async () => {
+      const proj = await DB.Projects.get(name) || { name };
+      await DB.Projects.put({ ...proj, name, segments, updated });
+    });
+    saveQueue = pending;
+    return pending;
   }
   window.addEventListener('beforeunload', () => { if (state.segments.length) saveProjectNow(); });
 
@@ -312,7 +337,7 @@
     $('#termList').innerHTML = list.map(t => `
       <div class="term-row" data-id="${esc(t.id)}">
         <div class="term-pair"><b>${esc(t.zh)}</b><span class="arrow">→</span><span class="en">${esc(t.en || '<待译>')}</span>
-          <button class="linkbtn webref-go" data-id="${t.id}" title="联网查阅该术语">🌐</button></div>
+          <button class="linkbtn webref-go" data-id="${esc(String(t.id))}" title="联网查阅该术语">🌐</button></div>
         ${t.note ? `<div class="term-note">${esc(t.note)}</div>` : ''}
       </div>`).join('') || '<div class="empty">术语库为空。</div>';
   }
@@ -354,13 +379,21 @@
   function bindEvents() {
     $('#projNew').onclick = async () => {
       const name = prompt('新项目名称：');
-      if (name) { await createProject(name); log('已切换到新项目：' + name); }
+      if (name) {
+        try { await createProject(name); log('已切换到新项目：' + name); }
+        catch (_) { log('保存或新建项目失败，请重试；不要关闭页面。'); }
+      }
     };
     $('#projSelect').onchange = async (e) => {
-      await saveProjectNow();
-      state.project = e.target.value;
-      await DB.Meta.set('activeProject', state.project);
-      await refreshAll();
+      const next = e.target.value;
+      try {
+        await withWorkspaceLocked(async () => {
+          await saveProjectNow();
+          state.project = next;
+          await DB.Meta.set('activeProject', next);
+          await refreshAll();
+        });
+      } catch (_) { $('#projSelect').value = state.project; log('保存或切换失败，请重试；不要关闭页面。'); }
     };
 
     // stats filter chips
@@ -530,9 +563,13 @@
     }
 
     async function runWebRef() {
+      const request = ++state.webrefRequest;
+      const project = state.project;
       const kw = ($('#webrefInput').value || '').trim();
       const status = $('#webrefStatus');
-      if (!kw) { $('#webrefList').innerHTML = '<div class="empty">输入关键词后自动抓取多源参考。</div>'; return; }
+      status.textContent = '';
+      $('#webrefList').innerHTML = '';
+      if (!kw) { $('#webrefList').innerHTML = '<div class="empty">输入关键词后按回车查阅。</div>'; return; }
       const term = state.webrefTerm;
       const isCJK = /[一-鿿]/.test(kw);
       const zhTerm = isCJK ? kw : (term ? term.zh : '');
@@ -540,14 +577,22 @@
       status.textContent = '正在抓取：维基百科 / 大都会博物馆 / 书目…';
       try {
         const data = await Web.lookupAll(zhTerm, enTerm, { met: !!enTerm, archive: !!enTerm });
+        if (request !== state.webrefRequest || project !== state.project) return;
         status.textContent = '';
         webrefRender(data, kw);
       } catch (err) {
+        if (request !== state.webrefRequest || project !== state.project) return;
         status.textContent = '';
         $('#webrefList').innerHTML = `<div class="empty">抓取失败：${esc(err.message || '')}。请使用直达链接。</div>`;
       }
     }
     $('#webrefInput').addEventListener('keydown', e => { if (e.key === 'Enter') runWebRef(); });
+    $('#webrefInput').addEventListener('input', () => {
+      state.webrefRequest++;
+      state.webrefTerm = null;
+      $('#webrefStatus').textContent = '';
+      $('#webrefList').innerHTML = '<div class="empty">按回车搜索新关键词。</div>';
+    });
     $('#webrefEn').addEventListener('change', runWebRef);
 
     $('#webrefList').addEventListener('click', async e => {
@@ -597,7 +642,7 @@
     $('#btnWipe').onclick = async () => {
       if (!confirm(`清空项目「${state.project}」的句段工作区？（记忆库和术语库不受影响）`)) return;
       state.segments = [];
-      await DB.Projects.put({ name: state.project, segments: [] });
+      await saveProjectNow();
       renderSegments(); renderStats();
     };
     $('#btnBackup').onclick = exportBackup;
@@ -994,12 +1039,15 @@
       const newTerms = clean.terms.filter(r => !termKeys.has(r.project + '\u0000' + r.zh));
       const skipped = (clean.tm.length - newTm.length) + (clean.terms.length - newTerms.length);
       if (!confirm(`恢复备份（消毒后）：记忆 ${newTm.length} 条、术语 ${newTerms.length} 条、项目 ${clean.projects.length} 个。\n合并策略：记忆/术语去重后合并（跳过 ${skipped} 条重复），同名项目的工作区以备份为准。\n继续？`)) return;
-      await DB.TM.addMany(newTm);
-      await DB.Terms.addMany(newTerms);
-      for (const p of clean.projects) await DB.Projects.put(p);
-      state.projects = (await DB.Projects.all()).map(p => p.name);
-      await refreshAll();
-      await rematchAll();
+      await withWorkspaceLocked(async () => {
+        await saveProjectNow();
+        await DB.TM.addMany(newTm);
+        await DB.Terms.addMany(newTerms);
+        for (const p of clean.projects) await DB.Projects.put(p);
+        state.projects = (await DB.Projects.all()).map(p => p.name);
+        await refreshAll();
+        await rematchAll();
+      });
       log(`备份恢复完成：新增记忆 ${newTm.length}、新增术语 ${newTerms.length}（跳过重复 ${skipped}）。`);
     }
     async function restoreBackup(e) {
@@ -1027,12 +1075,13 @@
                 if (!zh.trim() && !en.trim()) return;
                 // 自动识别：Word 修订模式携带的修订人与时间
                 const trk = (t.rowTracked || []).find(x => x.row === (firstRowTracked ? ri : ri + 1) && x.col === sniff.tgtCol);
+                const pairIndex = pairs.length;
                 pairs.push({ zh, en, author: trk ? trk.author : undefined, date: trk ? trk.date : undefined });
                 // 自动识别：Word 批注（导师/专家意见）
                 (t.rowComments || []).filter(rc => rc.row === (firstRowTracked ? ri : ri + 1) && rc.col === sniff.tgtCol).forEach(rc => {
                   rc.ids.forEach(id => {
                     const c2 = (parsed.comments || []).find(cc => String(cc.id) === String(id));
-                    if (c2 && c2.text) comments.push({ zh, author: c2.author, date: c2.date, text: c2.text });
+                    if (c2 && c2.text) comments.push({ pairIndex, zh, author: c2.author, date: c2.date, text: c2.text });
                   });
                 });
               });
@@ -1063,35 +1112,30 @@
     }
 
     let revPending = null;
+    let revParseGeneration = 0;
+    $('#dlgRevision').addEventListener('close', () => {
+      revParseGeneration++;
+      revPending = null;
+      $('#btnRevCommit').disabled = true;
+    });
     $('#revFile').onchange = async () => {
+      const generation = ++revParseGeneration;
+      revPending = null;
+      $('#btnRevCommit').disabled = true;
       const f = $('#revFile').files[0]; if (!f) return;
+      const project = state.project;
+      const segmentSnapshot = JSON.stringify(state.segments);
       $('#revPreview').innerHTML = '<div class="empty">解析并匹配中…</div>';
       try {
         const { pairs, note, comments, meta } = await revParsePairs(f);
-        const norm = Core.normalizeCJK;
-        const bySrc = new Map();
-        state.segments.forEach((seg, i) => {
-          const k = norm(seg.src);
-          if (!bySrc.has(k)) bySrc.set(k, i);
-        });
-        let matched = 0, revised = 0, unchanged = 0, fresh = 0;
-        const plan = [];
-        for (const p of pairs) {
-          const zk = norm(p.zh);
-          if (!zk || !p.en.trim()) continue;
-          const idx = bySrc.has(zk) ? bySrc.get(zk) : -1;
-          if (idx >= 0) {
-            matched++;
-            const seg = state.segments[idx];
-            if (!Diff.sameText(seg.tgt, p.en)) { revised++; plan.push({ kind: 'rev', idx, en: p.en.trim(), pair: p }); }
-            else unchanged++;
-          } else { fresh++; plan.push({ kind: 'new', zh: p.zh, en: p.en.trim(), pair: p }); }
-        }
+        if (generation !== revParseGeneration) return;
+        if (project !== state.project || segmentSnapshot !== JSON.stringify(state.segments)) throw new Error('工作区已变化，请重新选择修订文件。');
+        const { plan, comments: mappedComments, matched, revised, unchanged, fresh } = window.MiniCatRevision.buildPlan(state.segments, pairs, comments);
         const author = ($('#revAuthor').value || '').trim();
         const label = ($('#revLabel').value || '').trim();
         const autoAuthors = [...new Set(pairs.filter(p2 => p2.author).map(p2 => p2.author))];
         const metaLine = meta && meta.lastModifiedBy ? `｜文件属性：最后修改人 ${esc(meta.lastModifiedBy)}` : '';
-        revPending = { plan, author, label, sourceFile: f.name, comments: comments || [], meta: meta || {} };
+        revPending = { plan, author, label, sourceFile: f.name, comments: mappedComments, meta: meta || {}, project, segmentSnapshot };
         $('#revPreview').innerHTML = `<div class="mapping-note">来源：${esc(note)}｜共 ${plan.length + unchanged} 对。` +
           `匹配 <b>${matched}</b>，其中 <b style="color:var(--celadon-dark)">有修订 ${revised}</b>，无变化 ${unchanged}；未匹配将新增 <b>${fresh}</b> 段。` +
           (autoAuthors.length ? `｜<b>自动识别修订人</b>：${esc(autoAuthors.join('、'))}（来自 Word 修订记录）` : '') +
@@ -1102,15 +1146,26 @@
             const ops = Diff.diffWords(seg.tgt || '', p2.en);
             return '<div class="diff-line">' + ops.map(o => o.t === 'eq' ? esc(o.text) : o.t === 'del' ? '<del>' + esc(o.text) + '</del>' : '<ins>' + esc(o.text) + '</ins>').join(' ') + '</div>';
           }).join('');
-        $('#btnRevCommit').disabled = plan.length === 0;
+        $('#btnRevCommit').disabled = plan.length === 0 && mappedComments.length === 0;
       } catch (err) {
+        if (generation !== revParseGeneration) return;
+        revPending = null;
+        $('#btnRevCommit').disabled = true;
         $('#revPreview').innerHTML = `<div class="mapping-note">解析失败：${esc(err.message || '')}</div>`;
       }
     };
 
     $('#btnRevCommit').onclick = async () => {
       if (!revPending) return;
+      if (revPending.project !== state.project || revPending.segmentSnapshot !== JSON.stringify(state.segments)) {
+        revPending = null;
+        $('#btnRevCommit').disabled = true;
+        $('#revPreview').textContent = '工作区已变化，请重新选择修订文件。';
+        return;
+      }
       const { plan, comments, meta } = revPending;
+      revPending = null;
+      $('#btnRevCommit').disabled = true;
       const manualAuthor = ($('#revAuthor').value || '').trim();
       const label = ($('#revLabel').value || '').trim();
       const today = new Date().toISOString().slice(0, 10);
@@ -1145,18 +1200,10 @@
           newN++;
         }
       }
-      // Word 批注 → 批注模块（按中文原文匹配；去重）
+      // Word 批注 → 批注模块（使用预览阶段绑定的文件行目标；去重）
       const cmts = comments || [];
-      const segBySrc = new Map();
-      state.segments.forEach((seg, i) => {
-        const k = Core.normalizeCJK(seg.src);
-        if (!segBySrc.has(k)) segBySrc.set(k, i);
-      });
       for (const c2 of cmts) {
-        const k = Core.normalizeCJK(c2.zh);
-        const idx = segBySrc.get(k);
-        if (idx == null) continue;
-        const seg = state.segments[idx];
+        const seg = state.segments[c2.idx];
         if (!Array.isArray(seg.comments)) seg.comments = [];
         if (seg.comments.some(x2 => x2.text === c2.text && x2.author === c2.author)) continue;
         seg.comments.push({ author: c2.author || '批注', text: c2.text, date: String(c2.date || '').slice(0, 10) || today });

@@ -8,12 +8,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: 单元测试（core/io/officewrite/webref/restore）
-        run: |
-          node tests/core.test.js
-          node tests/msoffice.test.js
-          node tests/officewrite.test.js
-          node tests/webref.test.js
-          node tests/restore.test.js
-      - name: 规模基准
-        run: node tests/bench.js
+      - run: npm ci
+      - name: 单元测试与规模基准
+        run: npm test
+      - name: 安装隔离浏览器
+        run: npx playwright install --with-deps chromium
+      - name: 浏览器回归（保存、历史 ID、重复修订、搜索乱序）
+        run: npm run test:browser

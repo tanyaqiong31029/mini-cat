@@ -75,15 +75,18 @@ python3 -m http.server 8765
 
 ## 开发
 
-零依赖、无构建步骤；`js/core.js`（纯函数核心）与 `js/io.js`（格式解析）可在 Node 中直接测试：
+运行时零依赖、无构建步骤；开发测试使用 Node.js 20+、linkedom 与 Playwright：
 
 ```bash
-node tests/core.test.js    # 24 项单元测试（匹配/分段/CSV）
-node tests/msoffice.test.js # 14 项测试（ZIP 解包 + ICE 匹配）
-node tests/bench.js        # 规模基准
+npm ci
+npm test                   # 所有单元测试与规模基准
+npx playwright install chromium
+npm run test:browser       # 隔离浏览器与 IndexedDB，不读取个人浏览器资料
 ```
 
 架构与设计取舍见 [docs/architecture.md](docs/architecture.md)。
+
+修订导入时，相同原文按文件内出现顺序对应工作区内出现顺序。请保持同文段落的顺序，且包含该原文的全部重复段落；数量不一致会拒绝导入，不能可靠判断的局部修订不会自动覆盖首段。Word 批注跟随所在行匹配。
 
 ## 已知限制（v1.1）
 
