@@ -244,6 +244,77 @@
     return { pairs: S.map((s, i) => ({ src: s, tgt: T[i] })), mismatch: 0 };
   }
 
+
+  /* ---------- 备份消毒（防跨浏览器 ID 覆盖与注入） ---------- */
+  /* 校验备份结构；丢弃外来 ID（本机重新自增）；长度封顶；重算派生字段（srcNorm/bigrams
+   * 不信任备份文件）；工作区 segments 白名单化。所有字符串字段转义责任在渲染层。 */
+  function sanitizeBackup(data, opts) {
+    opts = opts || {};
+    const defaultProject = String(opts.defaultProject || '导入备份').slice(0, 120);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('备份格式无效');
+    if (!Array.isArray(data.tm) || !Array.isArray(data.terms)) throw new Error('不是 Mini-CAT 备份文件（缺少 tm/terms）');
+    const cap = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+    const int01 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(101, Math.round(n))) : 0; };
+
+    const tm = data.tm
+      .filter(r => r && typeof r === 'object' && typeof r.src === 'string' && r.src.trim() && typeof r.tgt === 'string')
+      .map(r => {
+        const src = r.src.slice(0, 20000);
+        return {
+          project: cap(r.project, 120) || defaultProject,
+          src, tgt: r.tgt.slice(0, 20000),
+          srcNorm: Core.normalizeCJK(src),
+          bigrams: [...Core.bigrams(src)],
+          note: cap(r.note, 4000),
+          origin: cap(r.origin, 200),
+          date: cap(r.date, 20),
+          prevNorm: cap(r.prevNorm, 20000)
+        }; // id 一律丢弃 → 本机 autoIncrement 重新分配
+      });
+
+    const terms = data.terms
+      .filter(r => r && typeof r === 'object' && typeof r.zh === 'string' && r.zh.trim())
+      .map(r => ({
+        project: cap(r.project, 120) || defaultProject,
+        zh: r.zh.slice(0, 500),
+        en: cap(r.en, 2000),
+        note: cap(r.note, 4000),
+        status: cap(r.status, 60),
+        pos: cap(r.pos, 60),
+        subject: cap(r.subject, 300)
+      }));
+
+    const segOk = (sg) => sg && typeof sg === 'object' && typeof sg.src === 'string' && sg.src.trim();
+    const segMap = (sg) => ({
+      src: sg.src.slice(0, 20000),
+      tgt: typeof sg.tgt === 'string' ? sg.tgt.slice(0, 20000) : '',
+      status: sg.status === 'translated' ? 'translated' : 'untranslated',
+      para: Number.isFinite(sg.para) ? sg.para : null,
+      bestScore: int01(sg.bestScore),
+      applied: !!sg.applied,
+      mt: !!sg.mt,
+      key0: cap(sg.key0, 20050),
+      matches: Array.isArray(sg.matches)
+        ? sg.matches.slice(0, 5).filter(m => m && typeof m === 'object').map(m => ({
+            score: int01(m.score), src: cap(m.src, 20000), tgt: cap(m.tgt, 20000),
+            note: cap(m.note, 1000), origin: cap(m.origin, 200)
+          }))
+        : []
+    });
+    const projects = Array.isArray(data.projects)
+      ? data.projects
+          .filter(p => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
+          .map(p => ({
+            name: p.name.slice(0, 120),
+            created: cap(p.created, 30),
+            updated: cap(p.updated, 30),
+            segments: Array.isArray(p.segments) ? p.segments.filter(segOk).map(segMap) : []
+          }))
+      : [];
+
+    return { version: 1, tm, terms, projects };
+  }
+
   /* ---------- export helpers ---------- */
 
   function download(filename, content, mime) {
@@ -257,7 +328,7 @@
   }
 
   const IO = {
-    readAsText, parseDelimited, buildDelimited, sniffBilingualTable, mapBilingualHeader,
+    readAsText, parseDelimited, buildDelimited, sniffBilingualTable, mapBilingualHeader, sanitizeBackup,
     parseTMX, buildTMX, parseTBX, buildTBX, parseJSONL, jsonlToTMRows, alignPairTexts, download
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = IO;

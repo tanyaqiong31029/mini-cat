@@ -107,21 +107,26 @@
 
   async function importSourceText(text, segMode) {
     const paras = String(text).split(/\n+/).map(p => p.trim()).filter(Boolean);
-    const exist = new Set(state.segments.map(s => Core.normalizeCJK(s.src)));
+    // 去重键 = 源文归一化 + 本次导入内的相对位置：同一次导入中重复出现的段落各自保留
+    // （[A,B,A] 不再坍缩为 [A,B]），重复导入同一文件仍整体跳过。
+    const exist = new Set(state.segments.map(s2 => s2.key0 || Core.normalizeCJK(s2.src)));
     let added = 0, paraBase = state.segments.length ? (state.segments[state.segments.length - 1].para ?? -1) + 1 : 0;
     const newSegs = [];
     if (segMode === 'paragraph') {
-      for (const p of paras) newSegs.push({ src: p, para: paraBase });
+      for (let pi = 0; pi < paras.length; pi++) newSegs.push({ src: paras[pi], para: paraBase + pi, rel: pi });
     } else {
+      let rel = 0;
       for (let pi = 0; pi < paras.length; pi++) {
-        for (const s of Core.segmentText(paras[pi], 6)) newSegs.push({ src: s, para: paraBase + pi });
+        for (const s of Core.segmentText(paras[pi], 6)) { newSegs.push({ src: s, para: paraBase + pi, rel: rel++ }); }
       }
     }
     for (const seg of newSegs) {
-      const key = Core.normalizeCJK(seg.src);
-      if (!key || exist.has(key)) continue;
+      const norm = Core.normalizeCJK(seg.src);
+      if (!norm) continue;
+      const key = norm + '@' + seg.rel;
+      if (exist.has(key) || exist.has(norm)) continue; // 位置键精确去重；旧版遗留记录按源文保守去重
       exist.add(key);
-      state.segments.push({ src: seg.src, tgt: null, status: 'untranslated', matches: [], bestScore: 0, para: seg.para });
+      state.segments.push({ src: seg.src, tgt: null, status: 'untranslated', matches: [], bestScore: 0, para: seg.para, key0: key });
       added++;
     }
     $('#log').prepend(Object.assign(document.createElement('div'), { textContent: `原文导入：新增 ${added} 段（共 ${state.segments.length} 段）。` }));
@@ -301,7 +306,7 @@
     const list = state.terms.filter(t =>
       !q || t.zh.toLowerCase().includes(q) || (t.en || '').toLowerCase().includes(q));
     $('#termList').innerHTML = list.map(t => `
-      <div class="term-row" data-id="${t.id}">
+      <div class="term-row" data-id="${esc(t.id)}">
         <div class="term-pair"><b>${esc(t.zh)}</b><span class="arrow">→</span><span class="en">${esc(t.en || '<待译>')}</span>
           <button class="linkbtn webref-go" data-id="${t.id}" title="联网查阅该术语">🌐</button></div>
         ${t.note ? `<div class="term-note">${esc(t.note)}</div>` : ''}
@@ -654,6 +659,16 @@
         if (/\.docx$/i.test(f.name)) { await previewDocxTm(f, mode); return; }
         if (/\.xlsx$/i.test(f.name)) { await previewXlsxTm(f); return; }
         const text = await IO.readAsText(f);
+        if (/\.jsonl$/i.test(f.name)) {
+          const objs = IO.parseJSONL(text);
+          const rows = objs
+            .filter(o => o && typeof o === 'object' && (o.zh || o.src) && (o.en || o.tgt))
+            .map(o => [String(o.zh || o.src || ''), String(o.en || o.tgt || ''), String(o.note || o.chapter || '')]);
+          if (!rows.length) { $('#tmMappingBox').innerHTML = '<div class="mapping-note">JSONL 中没有可导入的 zh/en 句对。</div>'; return; }
+          showTablePreview(['中文', '英文', '备注'], rows, { src: 0, tgt: 1, note: 2 });
+          $('#tmMappingBox').dataset.note = 'JSONL';
+          return;
+        }
         if (/<tmx[\s>]/i.test(text.slice(0, 400))) {
           const { tus } = IO.parseTMX(text);
           $('#tmMappingBox').innerHTML = `<div class="mapping-note">TMX：${tus.length} 个翻译单元，预览前 5 条：</div>` +
@@ -833,22 +848,33 @@
 
     /* backup */
     async function exportBackup() {
+      await saveProjectNow(); // 防抖中的最后编辑先落库，再快照
       const all = { version: 1, exported: new Date().toISOString(), projects: await DB.Projects.all(), tm: await DB.TM.all(), terms: await DB.Terms.all() };
       IO.download(`mini-cat备份_${today()}.json`, JSON.stringify(all, null, 1), 'application/json');
       await DB.Meta.set('lastBackupAt', Date.now());
       hideBackupBanner();
     }
     async function restoreFromJsonText(text) {
-      const data = JSON.parse(text);
-      if (!data.tm || !data.terms) throw new Error('不是 Mini-CAT 备份文件');
-      if (!confirm(`恢复备份：记忆 ${data.tm.length} 条、术语 ${data.terms.length} 条、项目 ${(data.projects || []).length} 个。\n将与现有数据合并（重复自动跳过）。继续？`)) return;
-      await DB.TM.addMany(data.tm);
-      await DB.Terms.addMany(data.terms);
-      for (const p of data.projects || []) await DB.Projects.put(p);
+      let raw;
+      try { raw = JSON.parse(text); }
+      catch (e) { throw new Error('备份不是有效 JSON：' + e.message); }
+      // 消毒：结构校验、去外来 ID（防跨库覆盖）、长度封顶、重算派生字段
+      const clean = IO.sanitizeBackup(raw, { defaultProject: state.project });
+      const allTm = await DB.TM.all();
+      const allTerms = await DB.Terms.all();
+      const tmKeys = new Set(allTm.map(e => e.project + '\u0000' + e.srcNorm + '\u0000' + e.tgt));
+      const termKeys = new Set(allTerms.map(t2 => t2.project + '\u0000' + t2.zh));
+      const newTm = clean.tm.filter(r => !tmKeys.has(r.project + '\u0000' + r.srcNorm + '\u0000' + r.tgt));
+      const newTerms = clean.terms.filter(r => !termKeys.has(r.project + '\u0000' + r.zh));
+      const skipped = (clean.tm.length - newTm.length) + (clean.terms.length - newTerms.length);
+      if (!confirm(`恢复备份（消毒后）：记忆 ${newTm.length} 条、术语 ${newTerms.length} 条、项目 ${clean.projects.length} 个。\n合并策略：记忆/术语去重后合并（跳过 ${skipped} 条重复），同名项目的工作区以备份为准。\n继续？`)) return;
+      await DB.TM.addMany(newTm);
+      await DB.Terms.addMany(newTerms);
+      for (const p of clean.projects) await DB.Projects.put(p);
       state.projects = (await DB.Projects.all()).map(p => p.name);
       await refreshAll();
       await rematchAll();
-      log(`备份恢复完成：记忆 ${data.tm.length}、术语 ${data.terms.length}。`);
+      log(`备份恢复完成：新增记忆 ${newTm.length}、新增术语 ${newTerms.length}（跳过重复 ${skipped}）。`);
     }
     async function restoreBackup(e) {
       const f = e.target.files[0]; if (!f) return;
