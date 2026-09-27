@@ -197,6 +197,78 @@ const { chromium } = require('@playwright/test');
     await page.waitForFunction(()=>document.querySelector('#candidateStatus').textContent.includes('待复核'));
     assert.equal(await page.locator('.candidate-row label').filter({hasText:'边缘计算 ·'}).count(),0);
     console.log('PASS local extraction, explicit human approval, term persistence and duplicate exclusion');
+    await page.evaluate(()=>document.querySelector('#dlgTermCandidates').close());
+    await page.locator('#projSelect').selectOption('New Project');
+    await page.waitForFunction(()=>!document.querySelector('.seg-tgt'));
+    await page.evaluate(async n=>{
+      const p=await MiniCatDB.Projects.get(n);
+      p.segments=[{src:'甲句。乙句。',tgt:'First. Second.',tgtRuns:[{text:'First.',bold:true},{text:' Second.',italic:true}],status:'translated',para:0,key0:'split-test@0',revisions:[{v:'V1',author:'Reviewer',text:'Original revision'}],comments:[{author:'Reviewer',text:'Original comment'}]},{src:'丙句。',tgt:'Third.',status:'untranslated',para:1,key0:'split-test@1'}];
+      await MiniCatDB.Projects.put(p);
+    },oldName);
+    await page.locator('#projSelect').selectOption(oldName);
+    await page.waitForFunction(()=>document.querySelectorAll('.seg-tgt').length===2);
+    const tmBefore=await page.evaluate(async n=>(await MiniCatDB.TM.all(n)).length,oldName);
+    await page.locator('.split-seg').first().click();
+    assert.equal(await page.locator('#btnSegmentCommit').isDisabled(),true);
+    const chooseCuts=()=>page.evaluate(()=>{
+      const source=document.querySelector('#splitSource'),target=document.querySelector('#splitTarget');
+      source.focus();source.setSelectionRange(3,3);source.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+      target.focus();target.setSelectionRange(7,7);target.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+    });
+    await chooseCuts();
+    assert.equal(await page.locator('#segmentEditPreview .pair-preview').count(),2);
+    if(process.env.MINICAT_QA_DIR)await page.screenshot({path:path.join(process.env.MINICAT_QA_DIR,'split-pairs.png'),fullPage:true});
+    await page.locator('#btnSegmentCommit').click();
+    await page.waitForFunction(()=>document.querySelectorAll('.seg-tgt').length===3&&!document.body.inert);
+    assert.deepEqual(await page.locator('.seg .seg-src').evaluateAll(nodes=>nodes.map(n=>n.textContent)),['甲句。','乙句。','丙句。']);
+    assert.equal(await page.locator('.seg-tgt').nth(0).locator('strong').textContent(),'First.');
+    assert.equal(await page.locator('.seg-tgt').nth(1).locator('em').textContent(),'Second.');
+    assert.equal(await page.evaluate(async n=>(await MiniCatDB.Projects.get(n)).segments[0].status,oldName),'untranslated');
+    await page.locator('.pair-history').first().click();
+    assert.ok((await page.locator('.seg-extra').first().textContent()).includes('Original comment'));
+    assert.ok((await page.locator('.seg-extra').first().textContent()).includes('Original revision'));
+    await page.reload();await ready();
+    assert.equal(await page.locator('.seg-tgt').count(),3);
+    assert.equal(await page.locator('#btnPairUndo').isDisabled(),true);
+    // Split boundaries must remain exact in paragraph exports, not just the UI.
+    await page.evaluate(()=>{window.pairExports={};MiniCatIO.download=(n,data)=>window.pairExports[n]=typeof data==='string'?data:Array.from(data);});
+    await page.locator('#btnExport').click();
+    await page.locator('#expRange').selectOption('all');
+    await page.locator('#btnDocPureTxt').click();await page.locator('#btnDocPure').click();
+    const pairExports=await page.evaluate(()=>window.pairExports);
+    assert.equal(Object.entries(pairExports).find(([n])=>n.endsWith('.txt'))[1],'First. Second.\n\nThird.');
+    const pairXml=await Zip.extractText(Uint8Array.from(Object.entries(pairExports).find(([n])=>n.endsWith('.docx'))[1]),'word/document.xml');
+    assert.ok(pairXml.includes('<w:b/>'));assert.ok(pairXml.includes('<w:i/>'));
+    await page.evaluate(()=>document.querySelector('#dlgExport').close());
+    // Fail the adjusted write (after the original snapshot has been saved).
+    await page.evaluate(()=>{
+      window.originalPairPut=MiniCatDB.Projects.put;let calls=0;
+      MiniCatDB.Projects.put=async(...args)=>{if(++calls===2)throw new Error('Injected save failure');return window.originalPairPut(...args);};
+    });
+    await page.locator('.merge-seg').first().click();await page.locator('#btnSegmentCommit').click();
+    await page.waitForFunction(()=>document.querySelectorAll('.seg-tgt').length===3&&!document.body.inert);
+    assert.equal(await page.evaluate(async n=>(await MiniCatDB.Projects.get(n)).segments.length,oldName),3);
+    assert.equal(await page.locator('#btnPairUndo').isDisabled(),true);
+    await page.evaluate(()=>{MiniCatDB.Projects.put=window.originalPairPut;});
+    const mergeFirst=async()=>{
+      await page.locator('.merge-seg').first().click();
+      assert.equal(await page.locator('#splitControls').isVisible(),false);
+      await page.locator('#btnSegmentCommit').click();
+      await page.waitForFunction(()=>document.querySelectorAll('.seg-tgt').length===2&&!document.body.inert);
+    };
+    await mergeFirst();
+    assert.equal(await page.locator('.seg-tgt').first().textContent(),'First. Second.');
+    assert.equal(await page.locator('.seg-tgt strong').count(),1);
+    assert.equal(await page.locator('.seg-tgt em').count(),1);
+    await page.locator('#btnPairUndo').click();
+    await page.waitForFunction(()=>document.querySelectorAll('.seg-tgt').length===3&&!document.body.inert);
+    await mergeFirst();
+    await page.locator('.seg-tgt').first().fill('Edited after merge');
+    await page.locator('#btnPairUndo').click();
+    assert.equal(await page.locator('.seg-tgt').first().textContent(),'Edited after merge');
+    assert.equal(await page.locator('.seg-tgt').count(),2);
+    assert.equal(await page.evaluate(async n=>(await MiniCatDB.TM.all(n)).length,oldName),tmBefore);
+    console.log('PASS paired split/merge, formatting and history preservation, reload, undo and protection of later edits; TM unchanged');
     assert.deepEqual(pageErrors, []);
     console.log('PASS ambiguous repeated paragraph is blocked; no browser errors');
   } finally {

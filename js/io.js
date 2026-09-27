@@ -287,7 +287,9 @@
       }));
 
     const segOk = (sg) => sg && typeof sg === 'object' && typeof sg.src === 'string' && sg.src.trim();
-    const segMap = (sg) => ({
+    const segMap = (sg, includeHistory = true) => {
+      if(includeHistory && Array.isArray(sg.alignmentHistory) && sg.alignmentHistory.length>100)throw new Error('句对调整历史超过 100 份，无法安全恢复，请拆分备份。');
+      return ({
       src: sg.src.slice(0, 20000),
       tgt: typeof sg.tgt === 'string' ? sg.tgt.slice(0, 20000) : '',
       // Formatting is structured data only; canonical plain text always wins.
@@ -299,16 +301,21 @@
       mt: !!sg.mt,
       key0: cap(sg.key0, 20050),
       author: cap(sg.author, 120),
+      joinNext: sg.joinNext===true,
+      splitLink: sg.splitLink && typeof sg.splitLink.id==='string' && ['left','right'].includes(sg.splitLink.side)
+        ? {id:cap(sg.splitLink.id,120),side:sg.splitLink.side} : undefined,
+      alignmentHistory: includeHistory && Array.isArray(sg.alignmentHistory)
+        ? sg.alignmentHistory.filter(segOk).map(h=>segMap(h,false)) : [],
       // 修订历史与批注必须随备份保留（审校留痕数据）
       revisions: Array.isArray(sg.revisions)
-        ? sg.revisions.slice(0, 20).filter(r => r && typeof r === 'object' && typeof r.text === 'string').map(r => ({
+        ? sg.revisions.filter(r => r && typeof r === 'object' && typeof r.text === 'string').map(r => ({
             v: cap(r.v, 20), author: cap(r.author, 120), text: r.text.slice(0, 20000),
             runs: RichText.normalize(r.runs, r.text.slice(0, 20000)),
             date: cap(r.date, 30), note: cap(r.note, 1000)
           }))
         : [],
       comments: Array.isArray(sg.comments)
-        ? sg.comments.slice(0, 50).filter(c => c && typeof c === 'object' && typeof c.text === 'string').map(c => ({
+        ? sg.comments.filter(c => c && typeof c === 'object' && typeof c.text === 'string').map(c => ({
             author: cap(c.author, 120), text: c.text.slice(0, 2000), date: cap(c.date, 30)
           }))
         : [],
@@ -319,6 +326,7 @@
           }))
         : []
     });
+    };
     const projects = Array.isArray(data.projects)
       ? data.projects
           .filter(p => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
@@ -326,7 +334,7 @@
             name: p.name.slice(0, 120),
             created: cap(p.created, 30),
             updated: cap(p.updated, 30),
-            segments: Array.isArray(p.segments) ? p.segments.filter(segOk).map(segMap) : []
+            segments: Array.isArray(p.segments) ? p.segments.filter(segOk).map(s=>segMap(s)) : []
           }))
       : [];
 

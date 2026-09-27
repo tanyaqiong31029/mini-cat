@@ -6,6 +6,7 @@
   const $$ = sel => [...document.querySelectorAll(sel)];
   const esc = Core.escapeHtml;
   const Rich = window.MiniCatRichText;
+  const SegmentOps = window.MiniCatSegmentOps;
 
   /* ---------------- state ---------------- */
   const state = {
@@ -17,6 +18,7 @@
     segments: [],      // [{src, tgt, status, bestScore, bestTgt, bestNote, matches}]
     filter: 'all',
     webrefRequest: 0,
+    pairUndo: [],
     busy: false
   };
 
@@ -56,6 +58,8 @@
   }
 
   async function refreshAll() {
+    state.pairUndo = [];
+    $('#btnPairUndo').disabled = true;
     state.webrefRequest++;
     state.webrefTerm = null;
     $('#webrefList').innerHTML = '<div class="empty">输入关键词后按回车查阅。</div>';
@@ -119,7 +123,7 @@
     const paras = String(text).split(/\n+/).map(p => p.trim()).filter(Boolean);
     // 去重键 = 源文归一化 + 本次导入内的相对位置：同一次导入中重复出现的段落各自保留
     // （[A,B,A] 不再坍缩为 [A,B]），重复导入同一文件仍整体跳过。
-    const exist = new Set(state.segments.map(s2 => s2.key0 || Core.normalizeCJK(s2.src)));
+    const exist = new Set(state.segments.flatMap(s2 => [s2.key0 || Core.normalizeCJK(s2.src),...(s2.alignmentHistory||[]).map(h=>h.key0||Core.normalizeCJK(h.src))]));
     let added = 0, paraBase = state.segments.length ? (state.segments[state.segments.length - 1].para ?? -1) + 1 : 0;
     const newSegs = [];
     if (segMode === 'paragraph') {
@@ -292,6 +296,9 @@
           <span class="badge ${band.cls}">${band.label}</span>
           ${seg.matches && seg.matches.length ? `<button class="linkbtn show-matches" data-i="${i}">候选 ${seg.matches.length}</button>` : ''}
           <span class="spacer"></span>
+          <button type="button" class="linkbtn split-seg" data-i="${i}">拆分句对</button>
+          <button type="button" class="linkbtn merge-seg" data-i="${i}" ${i+1>=state.segments.length?'disabled':''}>与下一句合并</button>
+          ${seg.alignmentHistory&&seg.alignmentHistory.length?`<button type="button" class="linkbtn pair-history" data-i="${i}">调整前记录</button>`:''}
           ${seg.status === 'translated'
             ? `<button class="linkbtn undo-seg" data-i="${i}">撤销</button>`
             : `<button class="linkbtn confirm-seg" data-i="${i}">✓ 完成并入库</button>`}
@@ -412,6 +419,78 @@
     });
 
     // segment interactions
+    let segmentEdit = null;
+    function previewSegmentEdit() {
+      if(!segmentEdit)return;
+      try {
+        let result;
+        const i=segmentEdit.index;
+        if(segmentEdit.mode==='split'){
+          if(segmentEdit.sourceCut==null||segmentEdit.targetCut==null)throw new Error('请分别点击原文、译文的拆分位置。空译文可直接拆分原文。');
+          result=SegmentOps.split(state.segments[i],segmentEdit.sourceCut,segmentEdit.targetCut,segmentEdit.id);
+        }else result=[SegmentOps.merge(state.segments[i],state.segments[i+1],$('#mergeMode').value)];
+        $('#segmentEditPreview').innerHTML=result.map((s,j)=>`<div class="pair-preview"><b>调整后句对 ${j+1}</b><div class="seg-src">${esc(s.src)}</div><div class="pair-target">${Rich.toHTML(s.tgtRuns,s.tgt)||'（空译文，待补充）'}</div></div>`).join('');
+        $('#segmentEditStatus').textContent='原文、译文和格式按预览保存。调整后需重新确认；记忆库旧记录不自动删除。';
+        $('#btnSegmentCommit').disabled=false;
+      }catch(error){$('#segmentEditPreview').innerHTML='';$('#segmentEditStatus').textContent=error.message;$('#btnSegmentCommit').disabled=true;}
+    }
+    function openSegmentEdit(i,mode){
+      const seg=state.segments[i];if(!seg||mode==='merge'&&!state.segments[i+1])return;
+      segmentEdit={index:i,mode,project:state.project,snapshot:JSON.stringify(state.segments),sourceCut:null,targetCut:seg.tgt?null:0,id:crypto.randomUUID()};
+      $('#segmentEditTitle').textContent=mode==='split'?`拆分第 ${i+1} 条句对`:`合并第 ${i+1}、${i+2} 条句对`;
+      $('#segmentEditHint').textContent=mode==='split'?'在两个只读文本框中分别点击分割点，下方预览左右两条句对。不会按中英文字符比例猜测位置。':'合并实际相邻的两条句对，即使筛选界面隐藏了其中一条。请核对预览；跨原文段落默认保留换行。';
+      $('#splitControls').hidden=mode!=='split';$('#mergeControls').hidden=mode!=='merge';$('#mergeMode').value='auto';
+      $('#splitSource').value=seg.src;$('#splitTarget').value=seg.tgt||'';
+      $('#dlgSegmentEdit').showModal();previewSegmentEdit();
+    }
+    for(const [id,field] of [['splitSource','sourceCut'],['splitTarget','targetCut']]){
+      for(const event of ['click','keyup','select'])$('#'+id).addEventListener(event,()=>{
+        if(!segmentEdit||segmentEdit.mode!=='split')return;
+        segmentEdit[field]=$('#'+id).selectionStart;previewSegmentEdit();
+      });
+    }
+    $('#mergeMode').onchange=previewSegmentEdit;
+    $('#dlgSegmentEdit').addEventListener('close',()=>{segmentEdit=null;});
+    async function writeAdjustedSegments(next,label,record=true){
+      await withWorkspaceLocked(async()=>{
+        await saveProjectNow();
+        const before=structuredClone(state.segments);
+        try {
+          state.segments=next;state.filter='all';
+          $('#matchList').innerHTML='';$('#matchSegIdx').textContent='段落 –';
+          await rematchAll();await saveProjectNow();
+          if(record){state.pairUndo.push({project:state.project,before,after:JSON.stringify(state.segments)});if(state.pairUndo.length>20)state.pairUndo.shift();}
+          $('#btnPairUndo').disabled=!state.pairUndo.length;
+          log(label+'。已保存；调整前修订与批注可在「调整前记录」查看。');
+        }catch(error){
+          clearTimeout(saveTimer);saveTimer=null;
+          state.segments=before;setBusy(false);renderSegments();renderStats();
+          // Re-persist the original snapshot, including when a storage wrapper
+          // reports failure after its transaction has actually committed.
+          try {await saveProjectNow();}
+          catch(_){throw new Error(error.message+'；回退内容也未能保存，请保持页面打开并立即导出备份。');}
+          throw error;
+        }
+      });
+    }
+    $('#btnSegmentCommit').onclick=async()=>{
+      if(!segmentEdit)return;
+      const edit=segmentEdit;
+      if(edit.project!==state.project||edit.snapshot!==JSON.stringify(state.segments)){$('#segmentEditStatus').textContent='句对已变化，请关闭后重新选择。';$('#btnSegmentCommit').disabled=true;return;}
+      try {
+        const next=structuredClone(state.segments);
+        if(edit.mode==='split')next.splice(edit.index,1,...SegmentOps.split(next[edit.index],edit.sourceCut,edit.targetCut,edit.id));
+        else next.splice(edit.index,2,SegmentOps.merge(next[edit.index],next[edit.index+1],$('#mergeMode').value));
+        $('#dlgSegmentEdit').close();
+        await writeAdjustedSegments(next,edit.mode==='split'?'句对已拆分':'相邻句对已合并');
+      }catch(error){alert('调整失败：'+error.message);}
+    };
+    $('#btnPairUndo').onclick=async()=>{
+      const entry=state.pairUndo[state.pairUndo.length-1];if(!entry)return;
+      if(entry.project!==state.project||entry.after!==JSON.stringify(state.segments)){alert('调整后已有其他编辑。为保护新内容，不覆盖撤销；可手动拆分/合并或查看调整前记录。');return;}
+      try {await writeAdjustedSegments(structuredClone(entry.before),'已撤销上一次句对调整',false);state.pairUndo.pop();$('#btnPairUndo').disabled=!state.pairUndo.length;}
+      catch(error){alert('撤销失败：'+error.message);}
+    };
     const editHistory = new WeakMap();
     function recordEditor(editor, remember = true) {
       const seg = state.segments[+editor.dataset.i];
@@ -473,6 +552,8 @@
       const formatButton = e.target.closest('[data-format]');
       if (formatButton) { formatEditor(formatButton.closest('.seg').querySelector('.seg-tgt'), formatButton.dataset.format); return; }
       const t = e.target;
+      if(t.classList.contains('split-seg')||t.classList.contains('merge-seg')){openSegmentEdit(+t.dataset.i,t.classList.contains('split-seg')?'split':'merge');return;}
+      if(t.classList.contains('pair-history')){toggleSegExtra(+t.dataset.i,'alignment');return;}
       if (t.classList.contains('confirm-seg')) {
         const i = +t.dataset.i, seg = state.segments[i];
         if (!(seg.tgt || '').trim()) { alert('译文为空。'); return; }
@@ -531,7 +612,10 @@
       if (!box.hidden && box.dataset.mode === mode) { box.hidden = true; return; }
       box.dataset.mode = mode;
       let h = '';
-      if (mode === 'rev') {
+      if(mode==='alignment'){
+        h='<div class="extra-title">调整前原始记录（归档，不冒充新句对的修订）</div>';
+        h+=(seg.alignmentHistory||[]).map((old,j)=>`<details><summary>记录 ${j+1} · ${esc((old.src||'').slice(0,45))}</summary><div class="seg-src">${esc(old.src||'')}</div><div class="pair-target">${Rich.toHTML(old.tgtRuns,old.tgt||'')}</div>${(old.revisions||[]).map(r=>`<div class="rev-row">${esc(r.v||'')} · ${esc(r.author||'')} · ${esc(r.date||'')}<div class="pair-target">${Rich.toHTML(r.runs,r.text||'')}</div></div>`).join('')}${(old.comments||[]).map(c=>`<div class="term-note">批注 ${esc(c.author||'')}：${esc(c.text||'')}</div>`).join('')}</details>`).join('');
+      } else if (mode === 'rev') {
         const revs = seg.revisions || [];
         h += '<div class="extra-title">修订记录</div>';
         if (revs.length >= 2) {
@@ -1021,20 +1105,26 @@
     function paragraphsFromSegs(segs, zhSide) {
       // rebuild paragraphs: consecutive segments of the same para joined (EN with spaces)
       const out = [];
+      const positions=new Map(state.segments.map((segment,index)=>[segment,index]));
       let cur = null;
       for (const s of segs) {
         const t = zhSide ? (s.src || '') : (s.tgt || '');
         if (cur === null || s.para == null || s.para !== cur.para) {
-          cur = { para: s.para, parts: [], runs: [] };
+          cur = { para: s.para, parts: [], runs: [], last: null, lastIndex: null };
           out.push(cur);
         }
+        if(cur.last&&positions.get(s)!==cur.lastIndex+1)cur.last={...cur.last,joinNext:false};
         if (t) {
-          if (cur.parts.length && !zhSide) cur.runs.push({ text: ' ' });
+          const separator=cur.parts.length&&!zhSide?SegmentOps.targetSeparator(cur.last,s):'';
+          if(separator){cur.parts.push(separator);cur.runs.push({text:separator});}
           cur.parts.push(t);
           cur.runs.push(...Rich.normalize(zhSide ? null : s.tgtRuns, t));
         }
+        if(t)cur.last=s;
+        else if(cur.last)cur.last={...cur.last,joinNext:cur.last.joinNext===true&&s.joinNext===true};
+        cur.lastIndex=positions.get(s);
       }
-      return out.map(p => ({ para: p.para, text: p.parts.join(zhSide ? '' : ' '), runs: Rich.normalize(p.runs) }));
+      return out.map(p => ({ para: p.para, text: p.parts.join(''), runs: Rich.normalize(p.runs) }));
     }
     function docxBlocksTitle(sub) {
       return [{ type: 'h1', text: state.project }, { type: 'p', text: sub, italic: true, gray: true }];

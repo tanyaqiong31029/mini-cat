@@ -134,6 +134,12 @@ mark.term { background: #ffe9b8; border-bottom: 1px solid var(--amber); cursor: 
   background: #fffdf8;
 }
 .seg-tgt:focus { outline: 2px solid var(--celadon-light); border-color: var(--celadon); }
+.seg-head { flex-wrap: wrap; }
+.pair-preview { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; padding: 8px; }
+.pair-preview .seg-src, .pair-target { white-space: pre-wrap; overflow-wrap: anywhere; }
+#splitControls textarea { width: 100%; cursor: text; }
+#splitControls[hidden], #mergeControls[hidden] { display: none !important; }
+#segmentEditPreview { max-height: 32vh; overflow-y: auto; }
 .seg-tgt:empty:before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
 .format-bar { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 6px 0; }
 .format-bar button { min-width: 30px; min-height: 28px; background: white; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
