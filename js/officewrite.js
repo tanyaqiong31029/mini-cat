@@ -135,13 +135,53 @@
     return xml;
   }
 
-  function buildDocx(blocks) {
+  /* 修订段落：ops = [{t:'eq'|'del'|'ins', text}]；del → w:del(w:delText)，ins → w:ins */
+  function trkXml(ops, author, date, idBase) {
+    const wattr = `w:author="${esc(author || 'Mini-CAT')}" w:date="${esc(date || '2026-09-27T00:00:00Z')}"`;
+    let xml = '', id = idBase.n;
+    for (const op of ops) {
+      if (op.t === 'eq') xml += runXml(op.text, {});
+      else if (op.t === 'del') {
+        xml += `<w:del w:id="${id}" ${wattr}><w:r><w:delText xml:space="preserve">${esc(op.text)} </w:delText></w:r></w:del>`;
+      } else {
+        xml += `<w:ins w:id="${id}" ${wattr}><w:r><w:t xml:space="preserve">${esc(op.text)} </w:t></w:r></w:ins>`;
+      }
+      id++;
+    }
+    idBase.n = id;
+    return xml;
+  }
+
+  /* 批注锚点：包住段落内容 */
+  function commentMarkers(block, ids) {
+    let head = '', tail = '';
+    for (const cid of ids) {
+      head += `<w:commentRangeStart w:id="${cid}"/>`;
+      tail += `<w:commentRangeEnd w:id="${cid}"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${cid}"/></w:r>`;
+    }
+    block.__cmHead = head; block.__cmTail = tail;
+    return block;
+  }
+
+  function buildDocx(blocks, opts) {
+    opts = opts || {};
+    const comments = Array.isArray(opts.comments) ? opts.comments : [];
+    const idBase = { n: 1000 };
     let body = '';
     for (const b of blocks) {
-      if (b.type === 'h1') body += pXml(b.text, { bold: true, size: 32 });
-      else if (b.type === 'h2') body += pXml(b.text, { bold: true, size: 26 });
-      else if (b.type === 'table') body += tableXml(b.header, b.rows);
-      else body += pXml(b.text, b);
+      let inner = '';
+      if (b.type === 'h1') inner = pXml(b.text, { bold: true, size: 32 });
+      else if (b.type === 'h2') inner = pXml(b.text, { bold: true, size: 26 });
+      else if (b.type === 'table') inner = tableXml(b.header, b.rows);
+      else if (b.type === 'trk') inner = '<w:p>' + trkXml(b.ops, b.author, b.date, idBase) + '</w:p>';
+      else inner = pXml(b.text, b);
+      const cmIds = Array.isArray(b.comments) ? b.comments.map(ci => comments[ci] ? comments[ci].id : null).filter(x => x !== null) : [];
+      if (cmIds.length && (b.type === 'p' || b.type === 'trk')) {
+        const c = commentMarkers({}, cmIds);
+        // 在段落内容外包 commentRangeStart/End
+        inner = inner.replace(/^<w:p>/, '<w:p>' + c.__cmHead).replace(/<\/w:p>$/, c.__cmTail + '</w:p>');
+      }
+      body += inner;
     }
     const document =
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
@@ -155,17 +195,35 @@
       `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
       `<Default Extension="xml" ContentType="application/xml"/>` +
       `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+      (comments.length ? `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>` : '') +
       `</Types>`;
-    const rels =
+    let docRels =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>`;
+    if (comments.length) docRels += `<Relationship Id="rIdC1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>`;
+    docRels += `</Relationships>`;
+    const pkgRels =
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
       `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>` +
       `</Relationships>`;
-    return zipStore([
+    const entries = [
       { name: '[Content_Types].xml', data: utf8(contentTypes) },
-      { name: '_rels/.rels', data: utf8(rels) },
-      { name: 'word/document.xml', data: utf8(document) }
-    ]);
+      { name: '_rels/.rels', data: utf8(pkgRels) },
+      { name: 'word/document.xml', data: utf8(document) },
+      { name: 'word/_rels/document.xml.rels', data: utf8(docRels) }
+    ];
+    if (comments.length) {
+      let cxml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+        `<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`;
+      for (const c of comments) {
+        cxml += `<w:comment w:id="${c.id}" w:author="${esc(c.author || '')}" w:date="${esc(c.date || '2026-09-27T00:00:00Z')}" w:initials="${esc(c.initials || '')}"><w:p><w:r><w:t xml:space="preserve">${esc(c.text)}</w:t></w:r></w:p></w:comment>`;
+      }
+      cxml += `</w:comments>`;
+      entries.push({ name: 'word/comments.xml', data: utf8(cxml) });
+    }
+    return zipStore(entries);
   }
 
   /* ---------- XLSX ---------- */

@@ -201,3 +201,13 @@ legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
 }
 .webref-links a:hover { border-color: var(--celadon); }
 .compliance-note { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+
+/* 修订与批注 */
+.seg-extra { margin-top: 6px; border-top: 1px dashed var(--line); padding-top: 6px; }
+.extra-title { font-size: 12px; font-weight: 700; color: var(--celadon-dark); margin-bottom: 4px; }
+.rev-row { border-left: 3px solid var(--celadon-light); padding: 3px 8px; margin-bottom: 5px; font-size: 13px; }
+.diff-line { font-size: 13px; line-height: 1.7; background: var(--paper-2); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-family: Georgia, serif; }
+.diff-line del { color: var(--red); text-decoration: line-through; background: #f9e8e5; padding: 0 2px; }
+.diff-line ins { color: var(--celadon-dark); text-decoration: none; background: var(--celadon-light); padding: 0 2px; }
+.cmt-add-row { display: flex; gap: 6px; margin-top: 4px; }
+.cmt-input { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 13px; }

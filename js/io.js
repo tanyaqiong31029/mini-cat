@@ -294,6 +294,19 @@
       applied: !!sg.applied,
       mt: !!sg.mt,
       key0: cap(sg.key0, 20050),
+      author: cap(sg.author, 120),
+      // 修订历史与批注必须随备份保留（审校留痕数据）
+      revisions: Array.isArray(sg.revisions)
+        ? sg.revisions.slice(0, 20).filter(r => r && typeof r === 'object' && typeof r.text === 'string').map(r => ({
+            v: cap(r.v, 20), author: cap(r.author, 120), text: r.text.slice(0, 20000),
+            date: cap(r.date, 30), note: cap(r.note, 1000)
+          }))
+        : [],
+      comments: Array.isArray(sg.comments)
+        ? sg.comments.slice(0, 50).filter(c => c && typeof c === 'object' && typeof c.text === 'string').map(c => ({
+            author: cap(c.author, 120), text: c.text.slice(0, 2000), date: cap(c.date, 30)
+          }))
+        : [],
       matches: Array.isArray(sg.matches)
         ? sg.matches.slice(0, 5).filter(m => m && typeof m === 'object').map(m => ({
             score: int01(m.score), src: cap(m.src, 20000), tgt: cap(m.tgt, 20000),

@@ -19,8 +19,10 @@
 
 <nav class="toolbar">
   <button id="btnImportSource" class="btn primary">① 导入原文</button>
+  <button id="btnImportRevision" class="btn">② 导入修订</button>
   <button id="btnImportTM" class="btn">导入记忆库</button>
   <button id="btnImportTerms" class="btn">导入术语库</button>
+  <button id="btnSettings" class="btn small" title="译者署名">👤 署名</button>
   <button id="btnExport" class="btn">导出 ▾</button>
   <button id="btnRematch" class="btn small">重新匹配</button>
   <button id="btnMT" class="btn small" style="display:none" title="Chrome 内置端侧翻译，不上传文本">MT 建议</button>
@@ -168,6 +170,14 @@
       </div>
       <p class="hint">纯译文按原文段落自动重建（英文句连回段落）；句句对照为「序号｜中文｜英文」三列表格，与项目交付件格式一致。</p>
     </fieldset>
+    <fieldset><legend>审校与修订</legend>
+      <div class="export-grid">
+        <button id="btnExpTrkDocx" class="btn" type="button">修订痕迹 (docx·Word修订模式)</button>
+        <button id="btnExpRevXlsx" class="btn" type="button">修订对照表 (xlsx)</button>
+        <button id="btnExpRevCsv" class="btn" type="button">修订对照表 (csv)</button>
+      </div>
+      <p class="hint">修订痕迹在 Word 中以原生修订模式呈现（删除线/下划线 + 修订人署名），批注以 Word 批注呈现——可直接用审阅功能逐条处理。</p>
+    </fieldset>
     <fieldset><legend>翻译数据</legend>
       <div class="export-grid">
         <button id="btnExpTMX" class="btn" type="button">记忆库 (tmx)</button>
@@ -182,13 +192,49 @@
   </form>
 </dialog>
 
-<script src="js/core.js?v=1.4"></script>
-<script src="js/db.js?v=1.4"></script>
-<script src="js/zip.js?v=1.4"></script>
-<script src="js/msoffice.js?v=1.4"></script>
-<script src="js/io.js?v=1.4"></script>
-<script src="js/officewrite.js?v=1.4"></script>
-<script src="js/webref.js?v=1.4"></script>
-<script src="js/app.js?v=1.4"></script>
+<dialog id="dlgRevision">
+  <form method="dialog" class="dlg-form"><h3>导入修订（审校留痕）</h3>
+    <label>审校文件（刘小婷等修改后的双语对照 docx / xlsx / csv / tmx）
+      <input type="file" id="revFile" accept=".docx,.xlsx,.csv,.tsv,.tmx,.txt">
+    </label>
+    <div class="two-col">
+      <label>修订人
+        <input type="text" id="revAuthor" placeholder="如：刘小婷">
+      </label>
+      <label>版本标签（留空自动编号）
+        <input type="text" id="revLabel" placeholder="如：V2 / V2.1">
+      </label>
+    </div>
+    <div id="revPreview" class="mapping-box"><div class="empty">选择文件后自动与当前项目句段匹配：识别修订 / 无变化 / 新增。</div></div>
+    <p class="hint">匹配键为中文原文。文本有变化的段落追加为新版本并保留旧版；未匹配的句对将作为新增段落导入。原文列不会被修改。</p>
+    <div class="dlg-actions">
+      <button class="btn" value="cancel">取消</button>
+      <button id="btnRevCommit" class="btn primary" type="button" disabled>应用修订</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgSettings">
+  <form method="dialog" class="dlg-form"><h3>署名设置</h3>
+    <label>译者姓名（用于初稿版本 V1 标记与批注署名）
+      <input type="text" id="setAuthor" placeholder="如：谭雅琼">
+    </label>
+    <p class="hint">仅保存在本机。多人协作时，每位成员在自己浏览器中设置本人姓名，导入修订时另行填写修订人。</p>
+    <div class="dlg-actions">
+      <button class="btn" value="cancel">取消</button>
+      <button id="btnSetSave" class="btn primary" type="button">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="js/core.js?v=1.5b"></script>
+<script src="js/db.js?v=1.5b"></script>
+<script src="js/zip.js?v=1.5b"></script>
+<script src="js/msoffice.js?v=1.5b"></script>
+<script src="js/io.js?v=1.5b"></script>
+<script src="js/officewrite.js?v=1.5b"></script>
+<script src="js/webref.js?v=1.5b"></script>
+<script src="js/diff.js?v=1.5b"></script>
+<script src="js/app.js?v=1.5b"></script>
 </body>
 </html>

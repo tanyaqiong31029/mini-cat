@@ -1,7 +1,7 @@
 /* Mini-CAT application: UI wiring, workspace state, matching pipeline. */
 (function () {
   'use strict';
-  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice, Write = window.MiniCatWrite, Web = window.MiniCatWebRef;
+  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice, Write = window.MiniCatWrite, Web = window.MiniCatWebRef, Diff = window.MiniCatDiff;
   const $ = sel => document.querySelector(sel);
   const $$ = sel => [...document.querySelectorAll(sel)];
   const esc = Core.escapeHtml;
@@ -29,6 +29,7 @@
   /* ---------------- init ---------------- */
   async function init() {
     state.projects = (await DB.Projects.all()).map(p => p.name);
+    state.author = (await DB.Meta.get('authorName', '')) || '';
     state.project = await DB.Meta.get('activeProject', '') || state.projects[0] || '';
     if (!state.project) await createProject('瓷器中国试译', true);
     await refreshAll();
@@ -268,9 +269,12 @@
           ${seg.status === 'translated'
             ? `<button class="linkbtn undo-seg" data-i="${i}">撤销</button>`
             : `<button class="linkbtn confirm-seg" data-i="${i}">✓ 完成并入库</button>`}
+          ${seg.revisions && seg.revisions.length ? `<button class="linkbtn rev-btn" data-i="${i}">⏱修订 ${seg.revisions.length}</button>` : ''}
+          <button class="linkbtn cmt-btn" data-i="${i}">💬${seg.comments && seg.comments.length ? seg.comments.length : ''}</button>
         </div>
         <div class="seg-src">${srcHtml}</div>
         <textarea class="seg-tgt" data-i="${i}" rows="2" placeholder="输入译文…">${esc(seg.tgt || '')}</textarea>
+        <div class="seg-extra" data-i="${i}" hidden></div>
       </div>`);
     }
     box.innerHTML = html.join('') || '<div class="empty">暂无句段。点击「导入原文」开始。</div>';
@@ -384,6 +388,18 @@
         seg.tgt = (seg.tgt || '').trim();
         if (!seg.tgt) { alert('译文为空。'); return; }
         seg.status = 'translated';
+        // 修订留痕：确认即追加版本（V1 初稿，或与上一版文本不同的新版本）
+        if (!Array.isArray(seg.revisions)) seg.revisions = [];
+        const lastRev = seg.revisions[seg.revisions.length - 1];
+        if (!lastRev || !Diff.sameText(lastRev.text, seg.tgt)) {
+          seg.revisions.push({
+            v: 'V' + (seg.revisions.length + 1),
+            author: state.author || '译者',
+            text: seg.tgt,
+            date: new Date().toISOString().slice(0, 10)
+          });
+          seg.author = seg.author || (state.author || '译者');
+        }
         const prev = i > 0 ? state.segments[i - 1] : null;
         const prevNorm = (prev && prev.para != null && seg.para != null && prev.para === seg.para)
           ? Core.normalizeCJK(prev.src) : '';
@@ -400,8 +416,54 @@
         // click term → open terms tab and search
         $('#termSearch').value = t.dataset.term || '';
         renderTerms(); switchSide('terms');
+      } else if (t.classList.contains('rev-btn') || t.classList.contains('cmt-btn')) {
+        toggleSegExtra(+t.dataset.i, t.classList.contains('rev-btn') ? 'rev' : 'cmt');
+      } else if (t.classList.contains('cmt-add')) {
+        const i = +t.dataset.i;
+        const input = document.querySelector('.seg-extra[data-i="' + i + '"] .cmt-input');
+        const text = (input && input.value || '').trim();
+        if (!text) return;
+        const seg = state.segments[i];
+        if (!Array.isArray(seg.comments)) seg.comments = [];
+        seg.comments.push({ author: state.author || '译者', text, date: new Date().toISOString().slice(0, 10) });
+        input.value = '';
+        toggleSegExtra(i, 'cmt');
+        saveProjectDebounced();
+        log('批注已添加。');
       }
     });
+
+    /* 修订记录与批注面板（按需渲染） */
+    function toggleSegExtra(i, mode) {
+      const box = document.querySelector('.seg-extra[data-i="' + i + '"]');
+      if (!box) return;
+      const seg = state.segments[i];
+      if (!box.hidden && box.dataset.mode === mode) { box.hidden = true; return; }
+      box.dataset.mode = mode;
+      let h = '';
+      if (mode === 'rev') {
+        const revs = seg.revisions || [];
+        h += '<div class="extra-title">修订记录</div>';
+        if (revs.length >= 2) {
+          const ops = Diff.diffWords(revs[revs.length - 2].text, revs[revs.length - 1].text);
+          h += '<div class="diff-line">' + ops.map(o =>
+            o.t === 'eq' ? esc(o.text) :
+            o.t === 'del' ? '<del>' + esc(o.text) + '</del>' :
+            '<ins>' + esc(o.text) + '</ins>').join(' ') + '</div>';
+        }
+        h += revs.slice().reverse().map(rv =>
+          `<div class="rev-row"><b>${esc(rv.v)}</b> · ${esc(rv.author)} · ${esc(rv.date)}<div class="term-note">${esc(rv.text.slice(0, 160))}</div></div>`
+        ).join('') || '<div class="empty">尚无修订记录。确认段落时自动生成 V1。</div>';
+      } else {
+        const cmts = seg.comments || [];
+        h += '<div class="extra-title">批注</div>';
+        h += cmts.map(c2 => `<div class="rev-row"><b>${esc(c2.author)}</b> · ${esc(c2.date)}<div class="term-note">${esc(c2.text)}</div></div>`).join('')
+          || '<div class="empty">暂无批注。</div>';
+        h += `<div class="cmt-add-row"><input class="cmt-input" placeholder="添加批注（署名：${esc(state.author || '译者')}）…"><button class="linkbtn cmt-add" data-i="${i}">添加</button></div>`;
+      }
+      box.innerHTML = h;
+      box.hidden = false;
+    }
 
     // match panel: adopt
     $('#matchList').addEventListener('click', e => {
@@ -512,6 +574,19 @@
 
     // toolbar
     $('#btnImportSource').onclick = () => $('#dlgSource').showModal();
+    $('#btnImportRevision').onclick = async () => {
+      $('#revAuthor').value = state.author || '';
+      $('#revPreview').innerHTML = '<div class="empty">选择文件后自动与当前项目句段匹配。</div>';
+      $('#btnRevCommit').disabled = true;
+      $('#dlgRevision').showModal();
+    };
+    $('#btnSettings').onclick = async () => { $('#setAuthor').value = state.author || ''; $('#dlgSettings').showModal(); };
+    $('#btnSetSave').onclick = async () => {
+      state.author = $('#setAuthor').value.trim();
+      await DB.Meta.set('authorName', state.author);
+      $('#dlgSettings').close();
+      log('署名已设置：' + (state.author || '（空）'));
+    };
     $('#btnImportTM').onclick = () => { prepareTmDialog(); $('#dlgTM').showModal(); };
     $('#btnImportTerms').onclick = () => $('#dlgTerms').showModal();
     $('#btnExport').onclick = () => $('#dlgExport').showModal();
@@ -820,6 +895,54 @@
         .concat(segs.map((s, i) => [i + 1, s.src, s.tgt || '', s.bestScore || 0, s.status === 'translated' ? '已译' : '未译']));
       IO.download(`句句对照_${state.project}_${today()}.csv`, IO.buildDelimited(rows, ','), 'text/csv;charset=utf-8');
     };
+    $('#btnExpTrkDocx').onclick = () => {
+      const blocks = [{ type: 'h1', text: `修订痕迹 — ${state.project}` }, { type: 'p', text: `导出于 ${today()} · Word 修订模式（审阅 → 修订 可逐条接受/拒绝）`, italic: true, gray: true }];
+      const comments = [];
+      let n = 0;
+      const withHistory = state.segments.filter(sg => (sg.revisions && sg.revisions.length >= 1) && ((sg.revisions.length >= 2) || (sg.comments && sg.comments.length)));
+      if (!withHistory.length) { alert('当前项目中没有带修订记录或批注的段落。\n修订在确认段落或导入修订时自动生成。'); return; }
+      for (const seg of withHistory) {
+        const revs = seg.revisions;
+        const last = revs[revs.length - 1];
+        const prev = revs.length >= 2 ? revs[revs.length - 2] : null;
+        blocks.push({ type: 'p', text: seg.src, bold: true, size: 21 });
+        if (prev) {
+          blocks.push({ type: 'trk', ops: Diff.diffWords(prev.text, last.text), author: last.author, date: last.date + 'T00:00:00Z' });
+        } else {
+          blocks.push({ type: 'p', text: last.text, italic: true, gray: true });
+        }
+        const chain = revs.map(rv => `${rv.v} ${rv.author} ${rv.date}`).join(' → ');
+        const cmts = seg.comments || [];
+        const cmIdx = [];
+        for (const c of cmts) { comments.push({ id: n, author: c.author, date: (c.date || today()) + 'T00:00:00Z', text: c.text }); cmIdx.push(n); n++; }
+        blocks.push({ type: 'p', text: chain + (cmts.length ? `｜批注 ${cmts.length} 条` : ''), italic: true, gray: true, size: 18, comments: cmIdx });
+      }
+      IO.download(`修订痕迹_${state.project}_${today()}.docx`, Write.buildDocx(blocks, { comments }), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      log(`修订痕迹导出：${withHistory.length} 段、批注 ${comments.length} 条。`);
+    };
+    $('#btnExpRevXlsx').onclick = () => {
+      const rows = [['序号', '中文原文', '初版译文', '最新译文', '版本链', '修订人', '批注']]
+        .concat(state.segments.map((s2, i) => {
+          const revs = s2.revisions || [];
+          const first = revs[0] ? revs[0].text : (s2.tgt || '');
+          const last = revs.length ? revs[revs.length - 1] : null;
+          return [i + 1, s2.src, first, s2.tgt || '',
+            revs.map(rv => rv.v + '(' + rv.author + ')').join('→') || '—',
+            last ? last.author : '', (s2.comments || []).map(c2 => c2.author + ':' + c2.text).join('；')];
+        }));
+      IO.download(`修订对照_${state.project}_${today()}.xlsx`, Write.buildXlsx([{ name: '修订对照', rows }]), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    };
+    $('#btnExpRevCsv').onclick = () => {
+      const rows = [['序号', '中文原文', '初版译文', '最新译文', '版本链', '修订人', '批注']]
+        .concat(state.segments.map((s2, i) => {
+          const revs = s2.revisions || [];
+          const last = revs.length ? revs[revs.length - 1] : null;
+          return [i + 1, s2.src, revs[0] ? revs[0].text : (s2.tgt || ''), s2.tgt || '',
+            revs.map(rv => rv.v + '(' + rv.author + ')').join('→') || '—',
+            last ? last.author : '', (s2.comments || []).map(c2 => c2.author + ':' + c2.text).join('；')];
+        }));
+      IO.download(`修订对照_${state.project}_${today()}.csv`, IO.buildDelimited(rows, ','), 'text/csv;charset=utf-8');
+    };
     $('#btnExpBilingual').onclick = () => {
       const rows = [['#', '状态', '匹配', '中文', '英文']]
         .concat(exportSegs().map((s, i) => [i + 1, s.status === 'translated' ? '已译' : '未译', s.bestScore || 0, s.src, s.tgt || '']));
@@ -881,6 +1004,120 @@
       try { await restoreFromJsonText(await IO.readAsText(f)); }
       catch (err) { alert('恢复失败：' + err.message); }
     }
+
+    /* ---- 导入修订（审校留痕）：按中文源文匹配，文本变化即追加版本 ---- */
+    function revParsePairs(f) {
+      return Promise.resolve().then(async () => {
+        if (/\.docx$/i.test(f.name)) {
+          const { paragraphs, tables } = await Office.docxToBlocks(await f.arrayBuffer());
+          const t = tables.find(t2 => t2.rows.length >= 2 && t2.rows[0].length >= 2);
+          if (t) {
+            const sniff = Office.sniffDocxTable(t.rows);
+            if (sniff) return { pairs: t.rows.slice(1).map(r => ({ zh: r[sniff.srcCol] || '', en: r[sniff.tgtCol] || '' })), note: 'docx 表格' };
+          }
+          return { pairs: paragraphs.filter(Boolean).map(p => ({ zh: p, en: '' })), note: 'docx 段落（仅原文）' };
+        }
+        if (/\.xlsx$/i.test(f.name)) {
+          const sheets = await Office.xlsxToSheets(await f.arrayBuffer());
+          const sheet = sheets.reduce((a, b) => (b.rows.length > a.rows.length ? b : a));
+          const header = (sheet.rows[0] || []).map(h => String(h || '').trim());
+          const m = IO.mapBilingualHeader(header);
+          return { pairs: sheet.rows.slice(1).map(r => ({ zh: String(r[m.src] || ''), en: m.tgt >= 0 ? String(r[m.tgt] || '') : '' })), note: 'xlsx「' + sheet.name + '」' };
+        }
+        const text = await IO.readAsText(f);
+        if (/<tmx[\s>]/i.test(text.slice(0, 400))) {
+          const { tus } = IO.parseTMX(text);
+          return { pairs: tus.map(tu => ({ zh: tu.src, en: tu.tgt })), note: 'TMX' };
+        }
+        if (/\.jsonl$/i.test(f.name)) {
+          const objs = IO.parseJSONL(text);
+          return { pairs: objs.filter(o => o.zh && o.en).map(o => ({ zh: o.zh, en: o.en })), note: 'JSONL' };
+        }
+        const { header, rows, mapping } = IO.sniffBilingualTable(text);
+        return { pairs: rows.map(r => ({ zh: String(r[mapping.src] || ''), en: String(r[mapping.tgt] || '') })), note: 'CSV/TSV' };
+      });
+    }
+
+    let revPending = null;
+    $('#revFile').onchange = async () => {
+      const f = $('#revFile').files[0]; if (!f) return;
+      $('#revPreview').innerHTML = '<div class="empty">解析并匹配中…</div>';
+      try {
+        const { pairs, note } = await revParsePairs(f);
+        const norm = Core.normalizeCJK;
+        const bySrc = new Map();
+        state.segments.forEach((seg, i) => {
+          const k = norm(seg.src);
+          if (!bySrc.has(k)) bySrc.set(k, i);
+        });
+        let matched = 0, revised = 0, unchanged = 0, fresh = 0;
+        const plan = [];
+        for (const p of pairs) {
+          const zk = norm(p.zh);
+          if (!zk || !p.en.trim()) continue;
+          const idx = bySrc.has(zk) ? bySrc.get(zk) : -1;
+          if (idx >= 0) {
+            matched++;
+            const seg = state.segments[idx];
+            if (!Diff.sameText(seg.tgt, p.en)) { revised++; plan.push({ kind: 'rev', idx, en: p.en.trim() }); }
+            else unchanged++;
+          } else { fresh++; plan.push({ kind: 'new', zh: p.zh, en: p.en.trim() }); }
+        }
+        const author = ($('#revAuthor').value || '').trim();
+        const label = ($('#revLabel').value || '').trim();
+        revPending = { plan, author, label, sourceFile: f.name };
+        $('#revPreview').innerHTML = `<div class="mapping-note">来源：${esc(note)}｜共 ${plan.length + unchanged} 对。` +
+          `匹配 <b>${matched}</b>，其中 <b style="color:var(--celadon-dark)">有修订 ${revised}</b>，无变化 ${unchanged}；未匹配将新增 <b>${fresh}</b> 段。</div>` +
+          plan.filter(p2 => p2.kind === 'rev').slice(0, 4).map(p2 => {
+            const seg = state.segments[p2.idx];
+            const ops = Diff.diffWords(seg.tgt || '', p2.en);
+            return '<div class="diff-line">' + ops.map(o => o.t === 'eq' ? esc(o.text) : o.t === 'del' ? '<del>' + esc(o.text) + '</del>' : '<ins>' + esc(o.text) + '</ins>').join(' ') + '</div>';
+          }).join('');
+        $('#btnRevCommit').disabled = plan.length === 0;
+      } catch (err) {
+        $('#revPreview').innerHTML = `<div class="mapping-note">解析失败：${esc(err.message || '')}</div>`;
+      }
+    };
+
+    $('#btnRevCommit').onclick = async () => {
+      if (!revPending) return;
+      const { plan } = revPending;
+      // 修订人与版本标签在提交时实时读取（预览时可能还未填写）
+      const author = ($('#revAuthor').value || '').trim() || '审校';
+      const label = ($('#revLabel').value || '').trim();
+      const date = new Date().toISOString().slice(0, 10);
+      let revN = 0, newN = 0;
+      let paraBase = state.segments.length ? (state.segments[state.segments.length - 1].para ?? -1) + 1 : 0;
+      for (const p of plan) {
+        if (p.kind === 'rev') {
+          const seg = state.segments[p.idx];
+          if (!Array.isArray(seg.revisions)) seg.revisions = [];
+          const last = seg.revisions[seg.revisions.length - 1];
+          const v = label || ('V' + (seg.revisions.length + 1));
+          if (!last || !Diff.sameText(last.text, p.en)) {
+            seg.revisions.push({ v, author: author || '审校', text: p.en, date });
+          }
+          seg.tgt = p.en;
+          seg.status = 'translated';
+          seg.applied = false;
+          revN++;
+        } else {
+          const norm = Core.normalizeCJK(p.zh);
+          const revs = [{ v: label || 'V1', author: author || '译者', text: p.en, date }];
+          state.segments.push({
+            src: p.zh, tgt: p.en, status: 'translated', para: paraBase++,
+            bestScore: 0, matches: [], revisions: revs, author: author || '译者',
+            key0: norm + '@R' + newN
+          });
+          newN++;
+        }
+      }
+      $('#dlgRevision').close();
+      await saveProjectNow();
+      log(`修订导入完成：修订 ${revN} 段、新增 ${newN} 段（修订人：${author || '未署名'}）。`);
+      await rematchAll();
+      await saveProjectNow();
+    };
 
     /* ---- MT suggestions: Chrome built-in on-device Translator API (no network egress of user data;
      * feature-detected, the button stays hidden where unsupported) ---- */
