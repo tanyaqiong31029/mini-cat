@@ -101,6 +101,16 @@ const pkgRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   /* 段落（表外）不受影响 */
   ok(parsed.paragraphs.some(p => p === '尾段。'), 'body paragraph extracted');
 
+  /* --- 修订导入：格式-only 变更也算修订，且 plan 携带 runs --- */
+  const Rev = require('../js/revision-plan.js');
+  const segF = [{ src: '青釉', tgt: 'celadon glaze', tgtRuns: [{ text: 'celadon glaze' }], comments: [] }];
+  const pairsFmt = [{ zh: '青釉', en: 'celadon glaze', runs: [{ text: 'celadon', bold: true }, { text: ' glaze' }] }];
+  const planF = Rev.buildPlan(segF, pairsFmt, []);
+  ok(planF.revised === 1 && planF.plan[0].kind === 'rev', `format-only change → revision (got ${planF.revised})`);
+  ok(planF.plan[0].runs && planF.plan[0].runs[0].bold === true, 'plan carries normalized runs');
+  const planPlain = Rev.buildPlan(segF, [{ zh: '青釉', en: 'celadon glaze' }], []);
+  ok(planPlain.unchanged === 1 && planPlain.revised === 0, 'identical plain text → unchanged');
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });

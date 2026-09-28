@@ -35,6 +35,15 @@
 
 <div id="busyBar" style="display:none"><span id="busyMsg">处理中…</span></div>
 
+<div id="conflictBanner" style="display:none">
+  <span id="conflictText"></span>
+  <button id="btnConflictReload" class="btn small primary">刷新加载对方版本</button>
+  <button id="btnConflictForce" class="btn small danger">用本页内容强制覆盖</button>
+</div>
+<div id="tabLockBanner" style="display:none">
+  <span>⚠️ 该项目似乎已在其他标签页打开。请只在一个标签页编辑同一项目，避免互相覆盖（本页仍可编辑，保存时会做冲突检测）。</span>
+  <button id="btnTabLockDismiss" class="btn small">知道了</button>
+</div>
 <div id="backupBanner" style="display:none">
   <span>⏰ 距上次备份已超过 7 天。清除浏览器数据会丢失记忆库，建议先备份。</span>
   <button id="btnBannerBackup" class="btn small primary">立即备份</button>
@@ -189,7 +198,7 @@
         <button id="btnExpTermCsv" class="btn" type="button">术语库 (csv)</button>
       </div>
     </fieldset>
-    <p class="hint">导出的 TMX / TBX 可直接回流 porcelain-china-corpus 或导入 Trados / memoQ。</p>
+    <p class="hint">导出的 TMX / TBX 可直接回流 porcelain-china-corpus 或导入 Trados / memoQ。CSV 为原始数据交换格式（无公式注入防护，用表格软件打开时注意以 = + - @ 开头的单元格）；在表格软件中查看请优先用 XLSX 版本（单元格为显式文本类型）。</p>
     <div class="dlg-actions"><button class="btn" value="cancel">关闭</button></div>
   </form>
 </dialog>
@@ -259,19 +268,19 @@
     </div>
   </form>
 </dialog>
-<script src="js/core.js?v=1.6c"></script>
-<script src="js/term-engine.js?v=1.7"></script>
-<script src="js/term-candidates.js?v=1.7"></script>
-<script src="js/db.js?v=1.6c"></script>
-<script src="js/zip.js?v=1.6c"></script>
-<script src="js/msoffice.js?v=1.6c"></script>
-<script src="js/richtext.js?v=1.7"></script>
-<script src="js/segment-ops.js?v=1.8"></script>
-<script src="js/io.js?v=1.8"></script>
-<script src="js/officewrite.js?v=1.7"></script>
-<script src="js/webref.js?v=1.8.1"></script>
-<script src="js/diff.js?v=1.6c"></script>
-<script src="js/revision-plan.js?v=1.6d"></script>
-<script src="js/app.js?v=1.8.1"></script>
+<script src="js/core.js?v=1.9"></script>
+<script src="js/term-engine.js?v=1.9"></script>
+<script src="js/term-candidates.js?v=1.9"></script>
+<script src="js/db.js?v=1.9"></script>
+<script src="js/zip.js?v=1.9"></script>
+<script src="js/msoffice.js?v=1.9"></script>
+<script src="js/richtext.js?v=1.9"></script>
+<script src="js/segment-ops.js?v=1.9"></script>
+<script src="js/io.js?v=1.9"></script>
+<script src="js/officewrite.js?v=1.9"></script>
+<script src="js/webref.js?v=1.9"></script>
+<script src="js/diff.js?v=1.9"></script>
+<script src="js/revision-plan.js?v=1.9"></script>
+<script src="js/app.js?v=1.9"></script>
 </body>
 </html>

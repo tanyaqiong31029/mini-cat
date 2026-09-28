@@ -231,3 +231,7 @@ legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
 .cmt-add-row { display: flex; gap: 6px; margin-top: 4px; }
 .cmt-input { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
 .src-badge.related { background: var(--paper-2); color: var(--muted); }
+#conflictBanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fdf0ee; color: #8c3f32; font-size: 13px; padding: 6px 16px; border-bottom: 1px solid #eccfc9; }
+#conflictBanner span { flex: 1; }
+#tabLockBanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fff8e6; color: #7a5b16; font-size: 13px; padding: 6px 16px; border-bottom: 1px solid #ecd9a8; }
+#tabLockBanner span { flex: 1; }

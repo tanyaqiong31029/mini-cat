@@ -130,6 +130,36 @@
     return s.replace(/\u00a0/g, ' ');
   }
 
+  /* 运行级格式提取（加粗/斜体/下划线）：供修订回导保留审校人的格式调整 */
+  function paraRuns(p) {
+    const runs = [];
+    const sameM = (a, b) => !!a.bold === !!b.bold && !!a.italic === !!b.italic && !!a.underline === !!b.underline;
+    Array.from(byTag(p, 't')).forEach(t => {
+      const text = t.textContent || '';
+      if (!text) return;
+      const marks = {};
+      let n = t.parentNode;
+      while (n && n !== p) {
+        if (local(n) === 'r') {
+          const rpr = Array.from(n.children || []).find(c => local(c) === 'rPr');
+          if (rpr) Array.from(rpr.children).forEach(c => {
+            const nm = local(c);
+            const val = c.getAttribute('w:val');
+            const on = nm === 'u' ? val !== 'none' : (val !== '0' && val !== 'false');
+            if (nm === 'b') marks.bold = on;
+            if (nm === 'i') marks.italic = on;
+            if (nm === 'u') marks.underline = on;
+          });
+        }
+        n = n.parentNode;
+      }
+      const last = runs[runs.length - 1];
+      if (last && sameM(last, marks)) last.text += text;
+      else runs.push(Object.assign({ text }, (marks.bold || marks.italic || marks.underline) ? marks : {}));
+    });
+    return runs;
+  }
+
   /* 修订感知提取：final = 含 w:ins 的当前文本；original = 删除标记还原的修订前文本；
    * changes = 该段内 w:ins/w:del 的作者与时间（Word 修订模式自动署名）；
    * cmtIds = 段内 Word 批注锚点。 */
@@ -171,6 +201,7 @@
         const rows = [];
         const rowTracked = [];   // [{row, col, author, date, original, final}] — Word 修订模式
         const rowComments = [];  // [{row, col, ids}]        — Word 批注锚点
+        const cellRuns = [];     // [{row, col, runs}]       — 运行级格式（供修订回导保留）
         let rowIdx = 0;
         Array.from(byTag(node, 'tr')).forEach(tr => {
           const cells = [];
@@ -179,10 +210,13 @@
             const parts = [];
             const cellTracked = [];
             const cellCmtIds = [];
+            let cellRunsAll = [];
             Array.from(byTag(tc, 'p')).forEach(p => {
               const pp = paraParts(p);
               const t = pp.final.trim();
               if (t) parts.push(t);
+              cellRunsAll = cellRunsAll.concat(paraRuns(p));
+              if (cellRunsAll.length && parts.length > 1) cellRunsAll.push({ text: '\n' });
               if (pp.original.trim() && pp.original.trim() !== pp.final.trim()) {
                 for (const ch of pp.changes) {
                   cellTracked.push({ col: colIdx, author: ch.author, date: ch.date, original: pp.original.trim(), final: pp.final.trim() });
@@ -193,12 +227,15 @@
             cells.push(parts.join('\n'));
             for (const ct of cellTracked) rowTracked.push({ row: rowIdx, ...ct });
             if (cellCmtIds.length) rowComments.push({ row: rowIdx, col: colIdx, ids: cellCmtIds });
+            if (cellRunsAll.some(r2 => r2.bold || r2.italic || r2.underline)) {
+              cellRuns.push({ row: rowIdx, col: colIdx, runs: cellRunsAll });
+            }
             colIdx++;
           });
           rows.push(cells);
           rowIdx++;
         });
-        if (rows.length) tables.push({ rows, rowTracked, rowComments });
+        if (rows.length) tables.push({ rows, rowTracked, rowComments, cellRuns });
       }
     }
     // Word 批注内容（comments.xml）

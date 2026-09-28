@@ -24,7 +24,12 @@ js/db.js            IndexedDB 封装：tm / terms / projects / meta 四个 store
 js/zip.js           极简 ZIP 读取器（central directory + DecompressionStream('deflate-raw')），零依赖
 js/msoffice.js      .xlsx（sharedStrings/inlineStr）与 .docx（段落+表格，命名空间无关解析）提取
 js/officewrite.js   .docx/.xlsx 生成器：ZIP store 容器（CRC32）+ 最小 OOXML（无边框表格补 tblBorders；xlsx inlineStr/数字单元格）
-js/webref.js        联网查阅：MediaWiki action API（origin=*）、Met Museum 开放 API、Internet Archive advancedsearch；全部带超时与降级（失败→权威站点直达链接）
+js/webref.js        联网查阅：MediaWiki action API（origin=*，zh/en/ja）、Met Museum 开放 API（响应形状宽容归一，旧搜索接口 2026-10-01 停用后可小幅适配）、Internet Archive advancedsearch；全部带超时与降级（失败→权威站点直达链接）
+js/diff.js          词级 LCS 差分（修订痕迹/预览）
+js/richtext.js      译文富文本（文本与格式分开存储）
+js/term-engine.js   本地候选术语提取（bilingual-term-extract 打包产物，见 term-engine-provenance.md）
+js/segment-ops.js   句对无损拆分/合并
+js/revision-plan.js 修订导入计划（匹配/修订/新增分类）
 js/io.js            文件格式：TMX 1.4、TBX-Basic、CSV/TSV（BOM+GBK 回退）、JSONL、粘贴对齐、备份
 js/app.js           状态管理、事件、渲染、批量匹配调度
 tests/              Node 单元测试（core+io 纯函数）与规模基准
@@ -113,4 +118,8 @@ docx/xlsx 生成走 ZIP store（无压缩）+ 标准 CRC32，最小 OOXML 部件
 
 ## 隐私与安全边界
 
-无网络请求（字体、脚本、样式全部本地）；数据不出 IndexedDB。唯一的外部交互是用户主动导入/导出文件。
+**翻译数据**（记忆库/术语库/句段/批注/修订历史）仅存于本机浏览器 IndexedDB；除下述情形外无网络请求。
+- 用户主动触发的"联网查阅"会向维基百科（zh/en/ja）、Met Museum、Internet Archive 发送**查询关键词**——不发送句段、译文或记忆库内容
+- 用户主动导入/导出文件
+- 多标签页保护：项目记录带版本号，保存走同事务 CAS（saveWithRev），冲突时拒绝写入并提示；配合 Web Locks 建议锁提醒
+- 备份恢复经 sanitizeBackup：结构校验、外来 ID 丢弃、派生字段重算；内容不截断（无损往返），由整体大小护栏控制资源消耗

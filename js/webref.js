@@ -47,10 +47,24 @@
       .sort((a, b) => (b.exact ? 1 : 0) - (a.exact ? 1 : 0));
   }
 
-  /* ---------- 大都会艺术博物馆（开放 API，CORS 开放；英文用法权威证据） ---------- */
+  /* ---------- 大都会艺术博物馆（开放 API，CORS 开放；英文用法权威证据） ----------
+   * 官方宣布旧搜索接口 2026-10-01 停用；此处对响应形状做宽容归一（objectIDs /
+   * results / items 均可），接口迁移后仅需少量适配。失败时抛错 → 卡片显示
+   * 停用提示与 Met 站内直达链接。 */
+  function normalizeMetSearch(data) {
+    if (!data || typeof data !== 'object') throw new Error('Met 响应为空');
+    if (Array.isArray(data.objectIDs)) return data.objectIDs;
+    for (const key of ['results', 'items', 'objects']) {
+      if (Array.isArray(data[key])) {
+        return data[key].map(x => (typeof x === 'object' && x !== null) ? (x.objectID ?? x.id ?? x.objectID) : x).filter(x => x != null);
+      }
+    }
+    throw new Error('Met 搜索响应格式不识别（接口可能已迁移）');
+  }
+
   async function metMuseum(term, limit) {
     const s = await fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1/search?q=${encodeURIComponent(term)}&hasImages=true`, 9000);
-    const ids = (s.objectIDs || []).slice(0, (limit || 4) * 2);
+    const ids = normalizeMetSearch(s).slice(0, (limit || 4) * 2);
     const out = [];
     for (const id of ids) {
       if (out.length >= (limit || 4)) break;

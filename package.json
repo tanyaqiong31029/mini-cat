@@ -1,14 +1,17 @@
 {
   "name": "mini-cat",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "private": true,
   "description": "轻量网页版翻译记忆 CAT 工具（零运行时依赖；linkedom 和 Playwright 仅测试环境使用）",
   "scripts": {
     "test": "node tests/core.test.js && node tests/msoffice.test.js && node tests/diff.test.js && node tests/tracked.test.js && node tests/officewrite.test.js && node tests/restore.test.js && node tests/webref.test.js && node tests/revision-plan.test.js && node tests/richtext.test.js && node tests/restore-format.test.js && node tests/officewrite-format.test.js && node tests/term-candidates.test.js && node tests/segment-ops.test.js && node tests/bench.js",
-    "test:browser": "node tests/browser.test.js"
+    "test:browser": "node tests/browser.test.js",
+    "test:coverage": "c8 --reporter=text npm test"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "linkedom": "^0.18.0"
+    "fake-indexeddb": "^6.2.5",
+    "linkedom": "^0.18.0",
+    "c8": "^10.1.0"
   }
 }

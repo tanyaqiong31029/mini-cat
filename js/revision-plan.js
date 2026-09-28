@@ -1,8 +1,8 @@
 /* Deterministic, occurrence-aware review matching; never guess partial duplicates. */
 (function (root, factory) {
-  if (typeof module !== 'undefined' && module.exports) module.exports = factory(require('./core.js'), require('./diff.js'));
-  else root.MiniCatRevision = factory(root.MiniCatCore, root.MiniCatDiff);
-})(typeof self !== 'undefined' ? self : this, function (Core, Diff) {
+  if (typeof module !== 'undefined' && module.exports) module.exports = factory(require('./core.js'), require('./diff.js'), require('./richtext.js'));
+  else root.MiniCatRevision = factory(root.MiniCatCore, root.MiniCatDiff, root.MiniCatRichText);
+})(typeof self !== 'undefined' ? self : this, function (Core, Diff, Rich) {
   'use strict';
   function buildPlan(segments, pairs, comments) {
     const existing = new Map(), incoming = new Map();
@@ -37,9 +37,13 @@
         pairTargets.set(pairIndex, idx);
         if (!en) return;
         matched++;
-        if (!Diff.sameText(segments[idx].tgt, en)) {
+        // 格式-only 变更（加粗/斜体等）同样算修订：文本一致但 runs 规范化结果不同
+        const runsChanged = p.runs
+          ? JSON.stringify(Rich.normalize(p.runs, en)) !== JSON.stringify(Rich.normalize(segments[idx].tgtRuns, segments[idx].tgt || ''))
+          : false;
+        if (!Diff.sameText(segments[idx].tgt, en) || runsChanged) {
           revised++;
-          plan.push({ kind: 'rev', idx, en, pair: p });
+          plan.push({ kind: 'rev', idx, en, runs: p.runs ? Rich.normalize(p.runs, en) : undefined, pair: p });
         } else unchanged++;
       } else if (en) {
         const idx = segments.length + fresh++;

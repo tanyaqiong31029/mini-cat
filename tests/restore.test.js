@@ -33,12 +33,23 @@ ok(clean2.tm.length === 1 && clean2.tm[0].tgt === 'ok translation', 'sanitize: j
 ok(clean2.terms.length === 1 && clean2.terms[0].zh === '真术语', 'sanitize: junk term rows filtered');
 ok(Array.isArray(clean2.projects) && clean2.projects.length === 0, 'sanitize: non-array projects → empty');
 
-/* --- length caps + default project --- */
-const big = { tm: [{ project: '', src: 'x'.repeat(30000), tgt: 'y'.repeat(30000) }], terms: [{ zh: 'z'.repeat(1000), note: 'n'.repeat(9000) }] };
+/* --- 无损：不再逐字段截断（v1.9 修复备份往返丢数据） --- */
+const longSrc = '原'.repeat(20001), longTgt = '译'.repeat(20001), longNote = '批'.repeat(2001);
+const big = { tm: [{ project: '', src: longSrc, tgt: longTgt, note: longNote }], terms: [{ zh: 'z'.repeat(600), note: 'n'.repeat(2100), en: 'e'.repeat(2100) }], projects: [{ name: 'P', segments: [{ src: longSrc, tgt: longTgt, status: 'translated', comments: [{ author: '李华东', text: longNote, date: '2026-09-28' }], revisions: [{ v: 'V1', author: '谭雅琼', text: longTgt, date: '2026-09-28' }] }] }] };
 const clean3 = IO.sanitizeBackup(big, { defaultProject: '导入备份' });
-ok(clean3.tm[0].src.length === 20000 && clean3.tm[0].tgt.length === 20000, 'sanitize: length caps applied');
+ok(clean3.tm[0].src.length === 20001 && clean3.tm[0].tgt.length === 20001 && clean3.tm[0].note.length === 2001, 'sanitize: long content lossless (20001/20001/2001)');
 ok(clean3.tm[0].project === '导入备份', 'sanitize: default project assigned');
-ok(clean3.terms[0].zh.length === 500 && clean3.terms[0].note.length === 4000, 'sanitize: term caps applied');
+ok(clean3.terms[0].zh.length === 600 && clean3.terms[0].note.length === 2100 && clean3.terms[0].en.length === 2100, 'sanitize: long term fields lossless');
+const seg3 = clean3.projects[0].segments[0];
+ok(seg3.src.length === 20001 && seg3.tgt.length === 20001, 'sanitize: long segment lossless');
+ok(seg3.comments[0].text.length === 2001, 'sanitize: long comment lossless');
+ok(seg3.revisions[0].text.length === 20001 && seg3.revisions[0].author === '谭雅琼', 'sanitize: long revision lossless');
+
+/* --- 整体大小护栏 --- */
+const huge = { tm: [{ src: 'x'.repeat(65000001), tgt: 'y' }], terms: [] };
+let guardMsg = '';
+try { IO.sanitizeBackup(huge, { defaultProject: 'X' }); } catch (e) { guardMsg = e.message; }
+ok(guardMsg.includes('上限'), `overall size guard rejects (got: ${guardMsg.slice(0, 60)})`);
 
 /* --- JSONL import path round-trip (README-claimed feature) --- */
 const lines = [

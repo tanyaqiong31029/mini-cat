@@ -19,7 +19,9 @@
     filter: 'all',
     webrefRequest: 0,
     pairUndo: [],
-    busy: false
+    busy: false,
+    rev: 0,            // 当前项目记录版本号（多标签页 CAS 保护）
+    pendingConflict: null
   };
 
   const TM_BANDS = [
@@ -71,10 +73,12 @@
     rebuildIndex();
     const proj = await DB.Projects.get(state.project) || { segments: [] };
     state.segments = proj.segments || [];
+    state.rev = typeof proj.rev === 'number' ? proj.rev : 0;
     await renderTerms();
     renderSegments();
     renderStats();
     $('#projectTitle').textContent = state.project;
+    acquireProjectLock(state.project);
   }
 
   function rebuildIndex() {
@@ -235,14 +239,44 @@
     const name = state.project;
     const segments = structuredClone(state.segments);
     const updated = new Date().toISOString();
+    const expectedRev = state.rev;
     const pending = saveQueue.catch(() => {}).then(async () => {
-      const proj = await DB.Projects.get(name) || { name };
-      await DB.Projects.put({ ...proj, name, segments, updated });
+      const r = await DB.Projects.saveWithRev(name, expectedRev, { created: undefined, segments, updated });
+      if (r.ok) { state.rev = r.newRev; return; }
+      // 版本冲突：另一标签页已保存过。绝不静默覆盖——展示冲突横幅等待用户选择。
+      state.pendingConflict = { name, segments, updated, currentRev: r.currentRev, otherCount: r.segments.length };
+      showConflictBanner();
     });
     saveQueue = pending;
     return pending;
   }
-  window.addEventListener('beforeunload', () => { if (state.segments.length) saveProjectNow(); });
+  /* 多标签页：Web Locks 建议锁（持有方正常编辑；未取得锁的页显示提醒）。
+   * 硬保护由 saveWithRev 的版本 CAS 承担，锁仅用于提前告知。 */
+  let releaseProjectLock = null;
+  async function acquireProjectLock(name) {
+    try {
+      if (releaseProjectLock) { const f = releaseProjectLock; releaseProjectLock = null; f(); }
+      if (!navigator.locks || !navigator.locks.request) return;
+      let releaseFn = null;
+      const held = new Promise(res => { releaseFn = res; });
+      navigator.locks.request('mini-cat:project:' + name, { ifAvailable: true }, lock => {
+        if (!lock) { showTabLockBanner(); return; }
+        return held;
+      }).catch(() => {});
+      releaseProjectLock = releaseFn;
+    } catch (e) { /* 环境不支持则跳过 */ }
+  }
+  function showConflictBanner() {
+    const b = $('#conflictBanner');
+    if (!b) return;
+    const pc = state.pendingConflict || {};
+    $('#conflictText').textContent = `项目「${pc.name}」已在其他标签页被修改并保存（对方现有 ${pc.otherCount} 段，本页 ${state.segments.length} 段）。为防覆盖，本页自动保存已被暂停。`;
+    b.style.display = '';
+  }
+  function showTabLockBanner() {
+    const b = $('#tabLockBanner');
+    if (b) b.style.display = '';
+  }
 
   /* ---------------- rendering ---------------- */
 
@@ -753,7 +787,7 @@
           ? `<span class="src-badge fail">无法访问</span>`
           : `<span class="src-badge">${g.hits.length} 条</span>`;
         h += `<div class="src-card"><div class="src-head"><b>${esc(g.source)}</b>${badge}</div>`;
-        if (g.error) h += `<div class="term-note">网络受限或超时——请用下方直达链接。</div>`;
+        if (g.error) h += `<div class="term-note">${g.source.includes('大都会') ? 'Met 接口不可用（官方已宣布旧搜索接口 2026-10-01 停用，迁移期间可能间歇失败）——' : '网络受限或超时——'}请用下方直达链接。</div>`;
         if (!g.error && g.hits.length && g.hits.some(h2 => h2.exact === false) && !g.hits.some(h2 => h2.exact === true)) {
           h += `<div class="term-note">该来源无精确匹配条目——可尝试下方 Google / 站内直达链接。</div>`;
         }
@@ -865,6 +899,15 @@
       await saveProjectNow();
       renderSegments(); renderStats();
     };
+    $('#btnConflictReload').onclick = () => location.reload();
+    $('#btnConflictForce').onclick = async () => {
+      const pc = state.pendingConflict;
+      if (!pc) return;
+      const r = await DB.Projects.saveWithRev(pc.name, null, { segments: pc.segments, updated: new Date().toISOString() });
+      if (r && r.ok) { state.rev = r.newRev; state.pendingConflict = null; $('#conflictBanner').style.display = 'none'; log('已按你的选择强制覆盖其他标签页的内容。'); }
+    };
+    $('#btnTabLockDismiss').onclick = () => { const b = $('#tabLockBanner'); if (b) b.style.display = 'none'; };
+    window.addEventListener('pagehide', () => { if (releaseProjectLock) { const f = releaseProjectLock; releaseProjectLock = null; f(); } });
     $('#btnBackup').onclick = exportBackup;
     $('#fileRestore').onchange = restoreBackup;
     $('#btnMT').onclick = applyMt;
@@ -1310,7 +1353,8 @@
                 // 自动识别：Word 修订模式携带的修订人与时间
                 const trk = (t.rowTracked || []).find(x => x.row === (firstRowTracked ? ri : ri + 1) && x.col === sniff.tgtCol);
                 const pairIndex = pairs.length;
-                pairs.push({ zh, en, author: trk ? trk.author : undefined, date: trk ? trk.date : undefined });
+                const cr = (t.cellRuns || []).find(x => x.row === dataRow && x.col === sniff.tgtCol);
+                pairs.push({ zh, en, author: trk ? trk.author : undefined, date: trk ? trk.date : undefined, runs: cr ? cr.runs : undefined });
                 // 自动识别：Word 批注（导师/专家意见）
                 (t.rowComments || []).filter(rc => rc.row === (firstRowTracked ? ri : ri + 1) && rc.col === sniff.tgtCol).forEach(rc => {
                   rc.ids.forEach(id => {
@@ -1415,20 +1459,22 @@
           if (!Array.isArray(seg.revisions)) seg.revisions = [];
           const last = seg.revisions[seg.revisions.length - 1];
           const v = label || ('V' + (seg.revisions.length + 1));
-          if (!last || !Diff.sameText(last.text, p.en)) {
-            seg.revisions.push({ v, author: resolveAuthor(p.pair || p), text: p.en, date: resolveDate(p.pair || p) });
+          const runsChanged = p.runs ? JSON.stringify(Rich.normalize(p.runs, p.en)) !== JSON.stringify(Rich.normalize(seg.tgtRuns, seg.tgt || '')) : false;
+          if (!last || !Diff.sameText(last.text, p.en) || runsChanged) {
+            seg.revisions.push({ v, author: resolveAuthor(p.pair || p), text: p.en, runs: p.runs ? Rich.normalize(p.runs, p.en) : Rich.normalize(seg.tgtRuns, seg.tgt || ''), date: resolveDate(p.pair || p) });
           }
           seg.tgt = p.en;
-          seg.tgtRuns = Rich.normalize(null, p.en);
+          seg.tgtRuns = p.runs ? Rich.normalize(p.runs, p.en) : Rich.normalize(null, p.en);
           seg.status = 'translated';
           seg.applied = false;
           revN++;
         } else {
           const norm = Core.normalizeCJK(p.zh);
           const a = resolveAuthor(p.pair || p);
-          const revs = [{ v: label || 'V1', author: manualAuthor || a, text: p.en, date: resolveDate(p.pair || p) }];
+          const revs = [{ v: label || 'V1', author: manualAuthor || a, text: p.en, runs: p.runs ? Rich.normalize(p.runs, p.en) : undefined, date: resolveDate(p.pair || p) }];
           state.segments.push({
-            src: p.zh, tgt: p.en, status: 'translated', para: paraBase++,
+            src: p.zh, tgt: p.en, tgtRuns: p.runs ? Rich.normalize(p.runs, p.en) : undefined,
+            status: 'translated', para: paraBase++,
             bestScore: 0, matches: [], revisions: revs, author: manualAuthor || a,
             key0: norm + '@R' + newN
           });

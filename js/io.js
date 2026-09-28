@@ -248,23 +248,32 @@
 
 
   /* ---------- 备份消毒（防跨浏览器 ID 覆盖与注入） ---------- */
-  /* 校验备份结构；丢弃外来 ID（本机重新自增）；长度封顶；重算派生字段（srcNorm/bigrams
-   * 不信任备份文件）；工作区 segments 白名单化。所有字符串字段转义责任在渲染层。 */
+  /* 校验备份结构；丢弃外来 ID（本机重新自增）；重算派生字段（srcNorm/bigrams 不信任备份文件）；
+   * 工作区 segments 白名单化。所有字符串字段转义责任在渲染层。
+   * v1.9：内容不再逐字段截断（截断曾导致备份往返静默丢数据）——无损往返由
+   * restore.test.js 断言；资源消耗由整体大小护栏控制；超限报错带上下文。 */
+  const BACKUP_MAX_CHARS = 60000000; // 整体护栏：约 60M 字符（远超正常项目，≈180MB UTF-8）
   function sanitizeBackup(data, opts) {
     opts = opts || {};
     const defaultProject = String(opts.defaultProject || '导入备份').slice(0, 120);
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('备份格式无效');
     if (!Array.isArray(data.tm) || !Array.isArray(data.terms)) throw new Error('不是 Mini-CAT 备份文件（缺少 tm/terms）');
-    const cap = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+    let totalChars = 0;
+    try { totalChars = JSON.stringify(data).length; }
+    catch (e) { throw new Error('备份内容无法序列化：' + e.message); }
+    if (totalChars > BACKUP_MAX_CHARS) {
+      throw new Error(`备份体积超过安全上限（约 ${Math.round(totalChars / 1000000)}M 字符，上限 ${BACKUP_MAX_CHARS / 1000000}M）。请按项目拆分备份后再恢复。`);
+    }
+    const cap = (v) => (typeof v === 'string' ? v : '');
     const int01 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(101, Math.round(n))) : 0; };
 
     const tm = data.tm
       .filter(r => r && typeof r === 'object' && typeof r.src === 'string' && r.src.trim() && typeof r.tgt === 'string')
       .map(r => {
-        const src = r.src.slice(0, 20000);
+        const src = r.src;
         return {
           project: cap(r.project, 120) || defaultProject,
-          src, tgt: r.tgt.slice(0, 20000),
+          src, tgt: r.tgt,
           srcNorm: Core.normalizeCJK(src),
           bigrams: [...Core.bigrams(src)],
           note: cap(r.note, 4000),
@@ -278,7 +287,7 @@
       .filter(r => r && typeof r === 'object' && typeof r.zh === 'string' && r.zh.trim())
       .map(r => ({
         project: cap(r.project, 120) || defaultProject,
-        zh: r.zh.slice(0, 500),
+        zh: r.zh,
         en: cap(r.en, 2000),
         note: cap(r.note, 4000),
         status: cap(r.status, 60),
@@ -288,12 +297,12 @@
 
     const segOk = (sg) => sg && typeof sg === 'object' && typeof sg.src === 'string' && sg.src.trim();
     const segMap = (sg, includeHistory = true) => {
-      if(includeHistory && Array.isArray(sg.alignmentHistory) && sg.alignmentHistory.length>100)throw new Error('句对调整历史超过 100 份，无法安全恢复，请拆分备份。');
+      if(includeHistory && Array.isArray(sg.alignmentHistory) && sg.alignmentHistory.length>100)throw new Error('某句段的句对调整历史超过 100 份，无法安全恢复（原文开头：' + String(sg.src||'').slice(0,40) + '）。请拆分备份。');
       return ({
-      src: sg.src.slice(0, 20000),
-      tgt: typeof sg.tgt === 'string' ? sg.tgt.slice(0, 20000) : '',
+      src: sg.src,
+      tgt: typeof sg.tgt === 'string' ? sg.tgt : '',
       // Formatting is structured data only; canonical plain text always wins.
-      tgtRuns: RichText.normalize(sg.tgtRuns, cap(sg.tgt, 20000)),
+      tgtRuns: RichText.normalize(sg.tgtRuns, sg.tgt || ''),
       status: sg.status === 'translated' ? 'translated' : 'untranslated',
       para: Number.isFinite(sg.para) ? sg.para : null,
       bestScore: int01(sg.bestScore),
@@ -309,14 +318,14 @@
       // 修订历史与批注必须随备份保留（审校留痕数据）
       revisions: Array.isArray(sg.revisions)
         ? sg.revisions.filter(r => r && typeof r === 'object' && typeof r.text === 'string').map(r => ({
-            v: cap(r.v, 20), author: cap(r.author, 120), text: r.text.slice(0, 20000),
-            runs: RichText.normalize(r.runs, r.text.slice(0, 20000)),
+            v: cap(r.v), author: cap(r.author), text: r.text,
+            runs: RichText.normalize(r.runs, r.text),
             date: cap(r.date, 30), note: cap(r.note, 1000)
           }))
         : [],
       comments: Array.isArray(sg.comments)
         ? sg.comments.filter(c => c && typeof c === 'object' && typeof c.text === 'string').map(c => ({
-            author: cap(c.author, 120), text: c.text.slice(0, 2000), date: cap(c.date, 30)
+            author: cap(c.author), text: c.text, date: cap(c.date)
           }))
         : [],
       matches: Array.isArray(sg.matches)
@@ -331,10 +340,10 @@
       ? data.projects
           .filter(p => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
           .map(p => ({
-            name: p.name.slice(0, 120),
+            name: p.name,
             created: cap(p.created, 30),
             updated: cap(p.updated, 30),
-            segments: Array.isArray(p.segments) ? p.segments.filter(segOk).map(s=>segMap(s)) : []
+            segments: Array.isArray(p.segments) ? (() => { try { return p.segments.filter(segOk).map(s=>segMap(s)); } catch (e) { throw new Error('项目「' + p.name + '」恢复失败：' + e.message); } })() : []
           }))
       : [];
 

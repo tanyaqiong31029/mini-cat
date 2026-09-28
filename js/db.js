@@ -134,6 +134,30 @@
     all() { return open().then(db => reqValue(db.transaction('projects').objectStore('projects').getAll())); },
     get(name) { return open().then(db => reqValue(db.transaction('projects').objectStore('projects').get(name))); },
     put(p) { return tx('projects', 'readwrite', s => { s.put(p); return p; }); },
+    /* 多标签页保护：同事务内比较项目版本号，仅当 rev 未被他人推进时写入。
+     * expectedRev=null 表示强制覆盖（用户在冲突提示中明确选择后）。 */
+    saveWithRev(name, expectedRev, data) {
+      return open().then(db => new Promise((resolve, reject) => {
+        const t = db.transaction('projects', 'readwrite');
+        const s = t.objectStore('projects');
+        let result = null;
+        const g = s.get(name);
+        g.onsuccess = () => {
+          const cur = g.result;
+          const curRev = cur && typeof cur.rev === 'number' ? cur.rev : 0;
+          if (expectedRev != null && curRev !== expectedRev) {
+            result = { ok: false, conflict: true, currentRev: curRev, segments: (cur && cur.segments) || [], updated: (cur && cur.updated) || '' };
+            return; // 不写入：事务提交但数据库未变
+          }
+          const rec = Object.assign({}, data, { name, rev: curRev + 1 });
+          s.put(rec);
+          result = { ok: true, newRev: curRev + 1 };
+        };
+        g.onerror = () => reject(g.error);
+        t.oncomplete = () => resolve(result);
+        t.onerror = () => reject(t.error);
+      }));
+    },
     delete(name) { return tx('projects', 'readwrite', s => { s.delete(name); }); }
   };
 
