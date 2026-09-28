@@ -9,6 +9,8 @@
   const SegmentOps = window.MiniCatSegmentOps;
 
   /* ---------------- state ---------------- */
+  // 队列投影版本号：本页排队中的保存全部完成后 DB 将达到的 rev（expectedRev 取它，避免同页连续保存自我冲突）
+  let projectedRev = 0;
   const state = {
     project: '',
     projects: [],
@@ -74,6 +76,7 @@
     const proj = await DB.Projects.get(state.project) || { segments: [] };
     state.segments = proj.segments || [];
     state.rev = typeof proj.rev === 'number' ? proj.rev : 0;
+    projectedRev = state.rev;
     await renderTerms();
     renderSegments();
     renderStats();
@@ -239,11 +242,19 @@
     const name = state.project;
     const segments = structuredClone(state.segments);
     const updated = new Date().toISOString();
-    const expectedRev = state.rev;
+    const expectedRev = projectedRev;
+    projectedRev = expectedRev + 1; // 乐观推进：saveQueue 串行，同页下一次保存的期望值随之 +1；写入失败或冲突时回滚为 DB 真实值
     const pending = saveQueue.catch(() => {}).then(async () => {
-      const r = await DB.Projects.saveWithRev(name, expectedRev, { created: undefined, segments, updated });
+      let r;
+      try {
+        r = await DB.Projects.saveWithRev(name, expectedRev, { created: undefined, segments, updated });
+      } catch (err) {
+        projectedRev = expectedRev; // 写入未落地（如存储失败注入）：投影回滚，允许紧接的回退保存
+        throw err;
+      }
       if (r.ok) { state.rev = r.newRev; return; }
       // 版本冲突：另一标签页已保存过。绝不静默覆盖——展示冲突横幅等待用户选择。
+      projectedRev = r.currentRev; state.rev = r.currentRev;
       state.pendingConflict = { name, segments, updated, currentRev: r.currentRev, otherCount: r.segments.length };
       showConflictBanner();
     });
@@ -259,9 +270,11 @@
       if (!navigator.locks || !navigator.locks.request) return;
       let releaseFn = null;
       const held = new Promise(res => { releaseFn = res; });
+      // 5 秒内未取得锁（如排队在旧文档之后）则放弃建议锁——CAS 仍是硬保护
+      const timeout = new Promise(res => setTimeout(res, 5000));
       navigator.locks.request('mini-cat:project:' + name, { ifAvailable: true }, lock => {
         if (!lock) { showTabLockBanner(); return; }
-        return held;
+        return Promise.race([held, timeout]).then(() => { if (releaseProjectLock === releaseFn) releaseProjectLock = null; });
       }).catch(() => {});
       releaseProjectLock = releaseFn;
     } catch (e) { /* 环境不支持则跳过 */ }
@@ -904,7 +917,7 @@
       const pc = state.pendingConflict;
       if (!pc) return;
       const r = await DB.Projects.saveWithRev(pc.name, null, { segments: pc.segments, updated: new Date().toISOString() });
-      if (r && r.ok) { state.rev = r.newRev; state.pendingConflict = null; $('#conflictBanner').style.display = 'none'; log('已按你的选择强制覆盖其他标签页的内容。'); }
+      if (r && r.ok) { state.rev = r.newRev; projectedRev = r.newRev; state.pendingConflict = null; $('#conflictBanner').style.display = 'none'; log('已按你的选择强制覆盖其他标签页的内容。'); }
     };
     $('#btnTabLockDismiss').onclick = () => { const b = $('#tabLockBanner'); if (b) b.style.display = 'none'; };
     window.addEventListener('pagehide', () => { if (releaseProjectLock) { const f = releaseProjectLock; releaseProjectLock = null; f(); } });

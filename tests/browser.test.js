@@ -27,7 +27,7 @@ const { chromium } = require('@playwright/test');
     page.on('pageerror', error => pageErrors.push(error.message));
     page.on('dialog', dialog => dialog.accept(dialog.type() === 'prompt' ? 'New Project' : undefined));
     await page.goto('http://127.0.0.1:' + server.address().port);
-    const ready = () => page.waitForFunction(() => document.querySelector('#log').textContent.includes('就绪'));
+    const ready = () => page.waitForFunction(() => document.querySelector('#log').textContent.includes('就绪'), { polling: 100 });
     await ready();
     await page.locator('#btnImportSource').click();
     await page.locator('#srcPaste').fill('甲段落内容。\n乙段落内容。\n甲段落内容。');
@@ -242,14 +242,15 @@ const { chromium } = require('@playwright/test');
     await page.evaluate(()=>document.querySelector('#dlgExport').close());
     // Fail the adjusted write (after the original snapshot has been saved).
     await page.evaluate(()=>{
-      window.originalPairPut=MiniCatDB.Projects.put;let calls=0;
-      MiniCatDB.Projects.put=async(...args)=>{if(++calls===2)throw new Error('Injected save failure');return window.originalPairPut(...args);};
+      // v1.9：句对调整的保存走 saveWithRev（版本 CAS），失败注入点随之迁移
+      window.originalPairPut=MiniCatDB.Projects.saveWithRev;let calls=0;
+      MiniCatDB.Projects.saveWithRev=async(...args)=>{if(++calls===2)throw new Error('Injected save failure');return window.originalPairPut(...args);};
     });
     await page.locator('.merge-seg').first().click();await page.locator('#btnSegmentCommit').click();
     await page.waitForFunction(()=>document.querySelectorAll('.seg-tgt').length===3&&!document.body.inert);
     assert.equal(await page.evaluate(async n=>(await MiniCatDB.Projects.get(n)).segments.length,oldName),3);
     assert.equal(await page.locator('#btnPairUndo').isDisabled(),true);
-    await page.evaluate(()=>{MiniCatDB.Projects.put=window.originalPairPut;});
+    await page.evaluate(()=>{MiniCatDB.Projects.saveWithRev=window.originalPairPut;});
     const mergeFirst=async()=>{
       await page.locator('.merge-seg').first().click();
       assert.equal(await page.locator('#splitControls').isVisible(),false);

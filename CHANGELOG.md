@@ -18,6 +18,11 @@
 - 新增 SECURITY.md、CONTRIBUTING.md、Issue 模板、term-engine 溯源文档（bilingual-term-extract 打包产物与重建命令）。
 - CSV 导出定位为原始数据交换格式（= + - @ 开头内容不转义），表格软件查看请用 XLSX（显式文本类型，附测试）。
 
+**发布与协作**
+- 部署 workflow（deploy.yml）与 CI 对接：CI 通过 → 才部署 Pages；Pages 源已切为 workflow 构建
+- **保存架构迁移**：句对调整/合并的保存从 `Projects.put` 迁移到 `saveWithRev`（版本 CAS）——写入失败注入的测试注入点随之迁移；`saveWithRev` 抛错时乐观投影回滚，保证紧接的回退保存不被自我冲突阻塞
+- 修订导入计划（revision-plan.js）感知富文本：文本相同但加粗/斜体不同的内容也判定为修订
+
 **遗留路线图**：app.js 按保存服务/编辑器/联网查询/修订导入逐步拆分；覆盖率报告（c8 脚本已备）与 WebKit 回归；多标签冲突的自动化浏览器测试。
 
 ## v1.8.1（2026-09-28）
