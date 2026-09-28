@@ -45,12 +45,14 @@ test('mismatched formatting falls back to canonical plain text', () => {
   assert.deepEqual(result.revisions[0].runs, [{ text: 'Old' }]);
 });
 
-test('target length cap cannot leave runs containing untruncated text', () => {
+test('long content survives losslessly (v1.9 removed the 20000-char cap that silently dropped data)', () => {
   const text = 'x'.repeat(20001);
   const result = restore({ tgt: text, tgtRuns: [{ text, bold: true }], revisions: [{ text, runs: [{ text, italic: true }] }] });
-  assert.equal(result.tgt.length, 20000);
-  assert.deepEqual(result.tgtRuns, [{ text: result.tgt }]);
-  assert.deepEqual(result.revisions[0].runs, [{ text: result.revisions[0].text }]);
+  assert.equal(result.tgt.length, 20001);
+  // 不变量保持：runs 与规范文本严格对齐，不得残留超长/截断文本
+  assert.deepEqual(result.tgtRuns, [{ text: result.tgt, bold: true }]);
+  assert.deepEqual(result.revisions[0].runs, [{ text: result.revisions[0].text, italic: true }]);
+  assert.equal(textOf(result.tgtRuns), result.tgt);
 });
 
 test('malformed formatting is discarded instead of changing text', () => {
