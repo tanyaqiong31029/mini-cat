@@ -230,3 +230,4 @@ legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
 .diff-line ins { color: var(--celadon-dark); text-decoration: none; background: var(--celadon-light); padding: 0 2px; }
 .cmt-add-row { display: flex; gap: 6px; margin-top: 4px; }
 .cmt-input { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+.src-badge.related { background: var(--paper-2); color: var(--muted); }

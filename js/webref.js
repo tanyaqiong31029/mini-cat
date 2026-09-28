@@ -22,16 +22,29 @@
     } finally { clearTimeout(timer); }
   }
 
-  /* ---------- MediaWiki（zh/en 维基百科；origin=* 允许跨域） ---------- */
+  /* ---------- MediaWiki（zh/en/ja 维基百科；origin=* 允许跨域） ---------- */
   async function wikipedia(lang, term, limit) {
     const url = `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&origin=*&list=search&srsearch=${encodeURIComponent(term)}&srlimit=${limit || 3}`;
     const data = await fetchJson(url);
-    const hits = ((data.query || {}).search || []).map(h => ({
+    const hits = rankHits(((data.query || {}).search || []).map(h => ({
       title: h.title,
       snippet: stripHtml(h.snippet),
       url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(h.title.replace(/ /g, '_'))}`
-    }));
-    return { source: lang === 'zh' ? '中文维基百科' : 'English Wikipedia', hits };
+    })), term);
+    const langName = { zh: '中文维基百科', en: 'English Wikipedia', ja: '日本語ウィキペディア' }[lang] || lang;
+    return { source: langName, hits };
+  }
+
+  /* 相关性分级：标题/摘要完整包含查询词 → 精确；否则相关（避免 尾崎行雄≠尾崎洵盛 这类误导） */
+  function rankHits(hits, term) {
+    const t = String(term || '').replace(/\s+/g, '');
+    if (!t) return hits.map(h => ({ ...h, exact: true }));
+    return hits
+      .map(h => {
+        const hay = ((h.title || '') + ' ' + (h.snippet || '')).replace(/\s+/g, '');
+        return { ...h, exact: hay.includes(t) };
+      })
+      .sort((a, b) => (b.exact ? 1 : 0) - (a.exact ? 1 : 0));
   }
 
   /* ---------- 大都会艺术博物馆（开放 API，CORS 开放；英文用法权威证据） ---------- */
@@ -77,17 +90,26 @@
 
   /* ---------- 权威站点直达链接（抓取失败时的保底，且覆盖无 CORS 的权威库） ---------- */
   function buildLinks(zhTerm, enTerm) {
-    const zh = encodeURIComponent(zhTerm || '');
-    const en = encodeURIComponent(enTerm || zhTerm || '');
-    const both = encodeURIComponent([zhTerm, enTerm].filter(Boolean).join(' '));
+    const zhRaw = String(zhTerm || '');
+    const enRaw = String(enTerm || zhTerm || '');
+    const bothRaw = [zhTerm, enTerm].filter(Boolean).join(' ');
+    const zh = encodeURIComponent(zhRaw);
+    const en = encodeURIComponent(enRaw);
+    const both = encodeURIComponent(bothRaw);
     const bing = (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}`;
+    const google = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
     return [
       { name: '术语在线（全国科技名词委）', url: `https://www.termonline.cn/search?searchText=${zh}`, note: '规范术语最高权威' },
-      { name: '故宫数字文物库', url: bing(`site:digicol.dpm.org.cn ${zhTerm || ''}`), note: '故宫院藏器物定名' },
-      { name: '台北故宫典藏', url: bing(`site:theme.npm.edu.tw ${enTerm || zhTerm || ''}`), note: '中文器物英译对照' },
-      { name: 'Met Museum 站内', url: `https://www.metmuseum.org/search-results?q=${en}`, note: '英文藏名用法' },
+      { name: 'Google 全部', url: google(bothRaw || zhRaw || enRaw), note: '在你的浏览器打开' },
+      { name: 'Google 图片', url: `https://www.google.com/search?tbm=isch&q=${both || zh || en}`, note: '器物图像对照' },
+      { name: 'Google Books', url: `https://www.google.com/search?tbm=bks&q=${both || en}`, note: '出版书目中的用法' },
       { name: 'Google Scholar', url: `https://scholar.google.com/scholar?q=${both}`, note: '学术文献用法' },
-      { name: 'Bing', url: bing(both || zhTerm || ''), note: '全网检索' },
+      { name: '日文维基站内', url: google(`site:ja.wikipedia.org ${zhRaw || enRaw}`), note: '日本学者/窑口' },
+      { name: '近代文献人名辞典', url: bing(`site:lit.kosh.or.jp ${zhRaw}`), note: '日本近代陶瓷学者' },
+      { name: '故宫数字文物库', url: bing(`site:digicol.dpm.org.cn ${zhRaw}`), note: '故宫院藏器物定名' },
+      { name: '台北故宫典藏', url: bing(`site:theme.npm.edu.tw ${enRaw || zhRaw}`), note: '中文器物英译对照' },
+      { name: 'Met Museum 站内', url: `https://www.metmuseum.org/search-results?q=${en}`, note: '英文藏名用法' },
+      { name: 'Bing', url: bing(bothRaw || zhRaw || enRaw), note: '全网检索' },
       { name: '百度百科', url: `https://baike.baidu.com/item/${zh}`, note: '中文释义参考' }
     ];
   }
@@ -97,12 +119,15 @@
     opts = opts || {};
     const tasks = [];
     if (zhTerm) tasks.push(wikipedia('zh', zhTerm, 3).catch(e => ({ source: '中文维基百科', error: String(e.message || e), hits: [] })));
-    if (enTerm) tasks.push(wikipedia('en', enTerm, 3).catch(e => ({ source: 'English Wikipedia', error: String(e.message || e), hits: [] })));
+    if (zhTerm) tasks.push(wikipedia('ja', zhTerm, 3).catch(e => ({ source: '日本語ウィキペディア', error: String(e.message || e), hits: [] })));
+    // 英文维基始终抓取：无英文译名时用中文词直查（EN 维基对中日专名的重定向覆盖较好）
+    const enQuery = enTerm || zhTerm;
+    if (enQuery) tasks.push(wikipedia('en', enQuery, 3).catch(e => ({ source: 'English Wikipedia', error: String(e.message || e), hits: [] })));
     if (enTerm && opts.met !== false) tasks.push(metMuseum(enTerm, 4).catch(e => ({ source: '大都会艺术博物馆', error: String(e.message || e), hits: [] })));
     if (enTerm && opts.archive !== false) tasks.push(archiveBooks(enTerm, 5).catch(e => ({ source: 'Internet Archive 书目', error: String(e.message || e), hits: [] })));
     const results = await Promise.all(tasks);
     return { results, links: buildLinks(zhTerm, enTerm) };
   }
 
-  return { stripHtml, fetchJson, wikipedia, metMuseum, archiveBooks, buildLinks, lookupAll };
+  return { stripHtml, fetchJson, wikipedia, metMuseum, archiveBooks, buildLinks, lookupAll, rankHits };
 });

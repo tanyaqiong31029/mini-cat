@@ -754,12 +754,17 @@
           : `<span class="src-badge">${g.hits.length} 条</span>`;
         h += `<div class="src-card"><div class="src-head"><b>${esc(g.source)}</b>${badge}</div>`;
         if (g.error) h += `<div class="term-note">网络受限或超时——请用下方直达链接。</div>`;
+        if (!g.error && g.hits.length && g.hits.some(h2 => h2.exact === false) && !g.hits.some(h2 => h2.exact === true)) {
+          h += `<div class="term-note">该来源无精确匹配条目——可尝试下方 Google / 站内直达链接。</div>`;
+        }
         for (const hit of g.hits.slice(0, 5)) {
           const meta = [hit.date, hit.culture, hit.medium, hit.year && (hit.year + '年'), hit.creator, hit.highlight ? '⭐ 馆方高亮藏品' : '']
             .filter(Boolean).map(x => esc(String(x))).join(' · ');
           const enish = typeof hit.title === 'string' ? hit.title : '';
+          const relBadge = hit.exact === undefined ? '' :
+            `<span class="src-badge ${hit.exact ? '' : 'related'}">${hit.exact ? '精确' : '相关'}</span>`;
           h += `<div class="hit-row">
-            <a class="hit-title" href="${esc(hit.url)}" target="_blank" rel="noopener noreferrer">${esc(hit.title)}</a>
+            <a class="hit-title" href="${esc(hit.url)}" target="_blank" rel="noopener noreferrer">${esc(hit.title)}</a>${relBadge}
             ${hit.snippet ? `<div class="term-note">${esc(hit.snippet.slice(0, 160))}</div>` : ''}
             ${meta ? `<div class="term-note">${meta}</div>` : ''}
             ${term ? `<div class="adopt-btns">
