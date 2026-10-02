@@ -1,6 +1,6 @@
 {
   "name": "mini-cat",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "private": true,
   "description": "轻量网页版翻译记忆 CAT 工具（零运行时依赖；linkedom 和 Playwright 仅测试环境使用）",
   "scripts": {

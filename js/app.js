@@ -1,7 +1,7 @@
 /* Mini-CAT application: UI wiring, workspace state, matching pipeline. */
 (function () {
   'use strict';
-  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice, Write = window.MiniCatWrite, Web = window.MiniCatWebRef, Diff = window.MiniCatDiff;
+  const Core = window.MiniCatCore, DB = window.MiniCatDB, IO = window.MiniCatIO, Office = window.MiniCatOffice, Write = window.MiniCatWrite, Web = window.MiniCatWebRef, Diff = window.MiniCatDiff, SR = window.MiniCatStyleRules;
   const $ = sel => document.querySelector(sel);
   const $$ = sel => [...document.querySelectorAll(sel)];
   const esc = Core.escapeHtml;
@@ -1510,6 +1510,119 @@
       await saveProjectNow();
     };
 
+    /* ---- 多模型译文对比 ---- */
+    let mm = null;
+    function resetMMDialog() {
+      ['A','B','C','D'].forEach(k => {
+        const f = document.getElementById('mmFile' + k); if (f) f.value = '';
+        const n = document.getElementById('mmName' + k); if (n) n.value = '';
+      });
+      document.getElementById('mmStatus').textContent = '';
+      document.getElementById('mmResults').hidden = true;
+      mm = null;
+    }
+    $('#btnMultiModel').onclick = () => { resetMMDialog(); $('#dlgMultiModel').showModal(); };
+    $('#btnMMCompare').onclick = async () => {
+      const models = [];
+      for (const k of ['A','B','C','D']) {
+        const f = document.getElementById('mmFile' + k).files[0];
+        if (!f) continue;
+        const name = (document.getElementById('mmName' + k).value || '').trim() || ('模型 ' + k);
+        models.push({ name, file: f });
+      }
+      if (models.length < 2) { $('#mmStatus').textContent = '请至少提供 2 个模型的译文文件。'; return; }
+      $('#mmStatus').textContent = '解析中…';
+      try {
+        const parsedSets = [];
+        for (const m of models) {
+          const { pairs } = await revParsePairs(m.file);
+          const clean = pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim()).map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
+          parsedSets.push({ name: m.name, pairs: clean });
+        }
+        const rowsMap = new Map();
+        for (const set of parsedSets) {
+          for (const p of set.pairs) {
+            const key = Core.normalizeCJK(p.zh);
+            if (!key) continue;
+            if (!rowsMap.has(key)) {
+              const segIdx = state.segments.findIndex(sg => Core.normalizeCJK(sg.src) === key);
+              rowsMap.set(key, { zh: p.zh, key, segIdx, para: segIdx >= 0 ? state.segments[segIdx].para : null, cands: [] });
+            }
+            const row = rowsMap.get(key);
+            if (!row.cands.some(c2 => c2.model === set.name)) row.cands.push({ model: set.name, text: p.en });
+          }
+        }
+        const rowsArr = [...rowsMap.values()].map(row => Object.assign(row, { cands: SR.rank(row.cands, row.zh, state.terms) }));
+        rowsArr.sort((a, b) => (a.para ?? 1e9) - (b.para ?? 1e9));
+        mm = { models: parsedSets.map(ps => ps.name), rows: rowsArr, pos: 0 };
+        $('#mmStatus').textContent = '对比完成：' + rowsArr.length + ' 句 × ' + models.length + ' 个模型。';
+        $('#mmResults').hidden = false;
+        mmRenderCurrent();
+      } catch (err) { $('#mmStatus').textContent = '解析失败：' + (err.message || err); }
+    };
+    function mmRenderCurrent() {
+      if (!mm || !mm.rows.length) return;
+      const row = mm.rows[mm.pos];
+      const seg = row.segIdx >= 0 ? state.segments[row.segIdx] : null;
+      $('#mmPos').textContent = '第 ' + (mm.pos + 1) + ' / ' + mm.rows.length + ' 句';
+      const rec = row.cands[0];
+      let h = '<div class="mm-zh"><b>原文</b>：' + esc(row.zh) + '</div>';
+      if (seg && seg.tgt) h += '<div class="mm-zh" style="color:var(--muted);font-size:13px"><b>当前</b>：' + esc(seg.tgt.slice(0, 160)) + '</div>';
+      for (const c of row.cands) {
+        const isRec = c === rec && row.cands.length > 1;
+        const fl = (c.flags || []).map(f2 => '<div class="term-note ' + (f2.level === '违规' ? 'mm-violation' : '') + '">' + esc(f2.level) + '：' + esc(f2.message) + '</div>').join('');
+        h += '<div class="mm-cand ' + (isRec ? 'recommended' : '') + '"><div class="mm-cand-head"><b>' + esc(c.model) + '</b><span class="src-badge">' + c.score + ' 分</span>' + (isRec ? '<span class="src-badge rec">推荐</span>' : '') + '<span style="flex:1"></span><button class="linkbtn mm-adopt" data-model="' + esc(c.model) + '">' + (seg && seg.tgt ? '覆盖' : '采用') + '</button></div><div class="mm-text">' + esc(c.text) + '</div>' + fl + '</div>';
+      }
+      const missing = mm.models.filter(m2 => !row.cands.some(c2 => c2.model === m2));
+      if (missing.length) h += '<div class="term-note">未提供该句译文：' + esc(missing.join('、')) + '</div>';
+      $('#mmSentence').innerHTML = h;
+    }
+    async function mmAdopt(model) {
+      if (!mm) return;
+      const row = mm.rows[mm.pos];
+      const cand = row.cands.find(c2 => c2.model === model);
+      if (!cand) return;
+      let idx = row.segIdx;
+      if (idx < 0) {
+        const norm = Core.normalizeCJK(row.zh);
+        const paraBase = state.segments.length ? (state.segments[state.segments.length - 1].para ?? -1) + 1 : 0;
+        state.segments.push({ src: row.zh, tgt: '', status: 'untranslated', para: paraBase, bestScore: 0, matches: [], key0: norm + '@MM' + idx });
+        idx = state.segments.length - 1;
+        row.segIdx = idx;
+      }
+      const seg = state.segments[idx];
+      if (seg.tgt && seg.tgt.trim() && !confirm('覆盖已有译文？')) return;
+      seg.tgt = cand.text; seg.tgtRuns = undefined; seg.mt = true;
+      if (!Array.isArray(seg.comments)) seg.comments = [];
+      seg.comments.push({ author: state.author || '译者', text: '采用' + model + '译文（体例评分 ' + cand.score + '）——确认入库前由译者本人改写定稿', date: today() });
+      await saveProjectNow(); mmRenderCurrent(); renderSegments(); renderStats();
+      log('已采用 ' + model + ' 译文为工作译文（待改写）。');
+    }
+    function mmExport() {
+      if (!mm || !mm.rows.length) return;
+      const head = ['序号', '中文原文', '工作区状态'].concat(mm.models).concat(['推荐', '推荐分']);
+      const rows2 = [head];
+      mm.rows.forEach((row, i) => {
+        const rec = row.cands[0];
+        const line = [i + 1, row.zh, row.segIdx >= 0 ? (state.segments[row.segIdx].status === 'translated' ? '已译' : '未译') : '—'];
+        for (const m2 of mm.models) { const c2 = row.cands.find(x => x.model === m2); line.push(c2 ? c2.text + '（' + c2.score + '）' : ''); }
+        line.push(rec ? rec.model : ''); line.push(rec ? rec.score : '');
+        rows2.push(line);
+      });
+      IO.download('多模型对照_' + state.project + '_' + today() + '.xlsx', Write.buildXlsx([{ name: '多模型对照', rows: rows2 }]), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    }
+    $('#mmPrev').onclick = () => { if (mm && mm.pos > 0) { mm.pos--; mmRenderCurrent(); } };
+    $('#mmNext').onclick = () => { if (mm && mm.pos < mm.rows.length - 1) { mm.pos++; mmRenderCurrent(); } };
+    $('#btnMMExport').onclick = mmExport;
+    $('#mmSentence').addEventListener('click', e => { const btn = e.target.closest('.mm-adopt'); if (btn) mmAdopt(btn.dataset.model); });
+
+    /* ---- MT suggestionsMMEOF
+echo "mm_code written"
+PYEOF
+wc -c /tmp/mm_code.js
+__zcode_status=$?
+if [ "$__zcode_status" -eq 0 ]; then pwd -P > '/var/folders/cx/84th5zjj7gn2k54hnd720ghw0000gn/T/zcode-ad5441bf-ab5d-415e-91e4-145aff208a2a-cwd'; fi
+exit "$__zcode_status"
     /* ---- MT suggestions: Chrome built-in on-device Translator API (no network egress of user data;
      * feature-detected, the button stays hidden where unsupported) ---- */
     let _translator = null;

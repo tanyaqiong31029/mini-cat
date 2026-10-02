@@ -19,6 +19,7 @@
 
 <nav class="toolbar">
   <button id="btnImportSource" class="btn primary">① 导入原文</button>
+  <button id="btnMultiModel" class="btn">多模型对比</button>
   <button id="btnImportRevision" class="btn">② 导入修订</button>
   <button id="btnImportTM" class="btn">导入记忆库</button>
   <button id="btnImportTerms" class="btn">导入术语库</button>
@@ -225,6 +226,34 @@
   </form>
 </dialog>
 
+<dialog id="dlgMultiModel" style="width:min(1100px,96vw)">
+  <form method="dialog" class="dlg-form"><h3>多模型译文对比</h3>
+    <div class="mm-import-grid">
+      <label>模型 A 名称<input type="text" id="mmNameA" placeholder="模型 A"></label>
+      <label>译文文件 A<input type="file" id="mmFileA" accept=".docx,.xlsx,.csv,.tmx,.jsonl,.txt"></label>
+      <label>模型 B 名称<input type="text" id="mmNameB" placeholder="模型 B"></label>
+      <label>译文文件 B<input type="file" id="mmFileB" accept=".docx,.xlsx,.csv,.tmx,.jsonl,.txt"></label>
+      <label>模型 C 名称<input type="text" id="mmNameC" placeholder="模型 C"></label>
+      <label>译文文件 C<input type="file" id="mmFileC" accept=".docx,.xlsx,.csv,.tmx,.jsonl,.txt"></label>
+      <label>模型 D 名称<input type="text" id="mmNameD" placeholder="模型 D"></label>
+      <label>译文文件 D<input type="file" id="mmFileD" accept=".docx,.xlsx,.csv,.tmx,.jsonl,.txt"></label>
+    </div>
+    <div class="dlg-actions"><button class="btn" value="cancel">关闭</button><button id="btnMMCompare" class="btn primary" type="button">解析并对比</button></div>
+    <div id="mmStatus" class="mapping-note"></div>
+    <div id="mmResults" hidden>
+      <div class="mm-nav">
+        <button id="mmPrev" class="btn small" type="button">‹ 上一句</button>
+        <span id="mmPos"></span>
+        <button id="mmNext" class="btn small" type="button">下一句 ›</button>
+        <span style="flex:1"></span>
+        <button id="btnMMExport" class="btn small" type="button">导出对照表 (xlsx)</button>
+      </div>
+      <div id="mmSentence"></div>
+      <p class="hint">推荐由《Style Sheet V2.6》规则引擎生成。推荐仅供人工参考——采用后成为<strong>工作译文</strong>，仍须译者本人改写并确认入库。</p>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="dlgSettings">
   <form method="dialog" class="dlg-form"><h3>署名设置</h3>
     <label>译者姓名（用于初稿版本 V1 标记与批注署名）
@@ -268,19 +297,20 @@
     </div>
   </form>
 </dialog>
-<script src="js/core.js?v=1.9"></script>
-<script src="js/term-engine.js?v=1.9"></script>
-<script src="js/term-candidates.js?v=1.9"></script>
-<script src="js/db.js?v=1.9"></script>
-<script src="js/zip.js?v=1.9"></script>
-<script src="js/msoffice.js?v=1.9"></script>
-<script src="js/richtext.js?v=1.9"></script>
-<script src="js/segment-ops.js?v=1.9"></script>
-<script src="js/io.js?v=1.9"></script>
-<script src="js/officewrite.js?v=1.9"></script>
-<script src="js/webref.js?v=1.9"></script>
-<script src="js/diff.js?v=1.9"></script>
-<script src="js/revision-plan.js?v=1.9"></script>
-<script src="js/app.js?v=1.9"></script>
+<script src="js/core.js?v=1.10"></script>
+<script src="js/term-engine.js?v=1.10"></script>
+<script src="js/term-candidates.js?v=1.10"></script>
+<script src="js/db.js?v=1.10"></script>
+<script src="js/zip.js?v=1.10"></script>
+<script src="js/msoffice.js?v=1.10"></script>
+<script src="js/richtext.js?v=1.10"></script>
+<script src="js/segment-ops.js?v=1.10"></script>
+<script src="js/io.js?v=1.10"></script>
+<script src="js/officewrite.js?v=1.10"></script>
+<script src="js/webref.js?v=1.10"></script>
+<script src="js/diff.js?v=1.10"></script>
+<script src="js/style-rules.js?v=1.10"></script>
+<script src="js/revision-plan.js?v=1.10"></script>
+<script src="js/app.js?v=1.10"></script>
 </body>
 </html>

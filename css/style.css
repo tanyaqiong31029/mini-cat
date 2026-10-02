@@ -235,3 +235,14 @@ legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
 #conflictBanner span { flex: 1; }
 #tabLockBanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fff8e6; color: #7a5b16; font-size: 13px; padding: 6px 16px; border-bottom: 1px solid #ecd9a8; }
 #tabLockBanner span { flex: 1; }
+
+.mm-import-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 8px 12px; margin-bottom: 8px; }
+.mm-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.mm-zh { font-size: 15px; line-height: 1.7; margin-bottom: 8px; }
+.mm-cand { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.mm-cand.recommended { border-color: var(--celadon); background: var(--celadon-light); }
+.mm-cand-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.mm-cand-head .spacer { flex: 1; }
+.mm-text { font-family: Georgia, serif; font-size: 15px; line-height: 1.6; }
+.mm-violation { color: var(--red); }
+.src-badge.rec { background: var(--amber); color: #fff; }
