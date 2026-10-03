@@ -1535,50 +1535,53 @@
       try {
         const parsedSets = [];
         for (const m of models) {
-          const { pairs } = await revParsePairs(m.file);
-          const clean = pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim()).map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
+          const rp = await revParsePairs(m.file);
+          const clean = rp.pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim())
+            .map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
           parsedSets.push({ name: m.name, pairs: clean });
         }
-        // 第一轮：精确匹配（normalizeCJK 相等）
-        const exactMap = new Map();
-        for (const set of parsedSets) {
-          for (const p of set.pairs) {
-            const key = Core.normalizeCJK(p.zh);
-            if (!key) continue;
-            if (!exactMap.has(key)) {
-              const segIdx = state.segments.findIndex(sg => Core.normalizeCJK(sg.src) === key);
-              exactMap.set(key, { zh: p.zh, key, segIdx, para: segIdx >= 0 ? state.segments[segIdx].para : null, cands: [], matchedBy: {} });
-            }
-            const row = exactMap.get(key);
-            if (!row.cands.some(c2 => c2.model === set.name)) {
-              row.cands.push({ model: set.name, text: p.en });
-              row.matchedBy[set.name] = 'exact';
-            }
-          }
-        }
-        // 第二轮：模糊匹配（Dice ≥ 0.6）——把精确匹配不到的句对归入最接近的已匹配行
-        const allZhKeys = [...exactMap.keys()];
-        for (const set of parsedSets) {
+        // 以第一个模型为锚（canonical 分句），后续模型对齐到锚
+        const anchor = parsedSets[0];
+        const rest = parsedSets.slice(1);
+        const rowsArr = [];
+        // 锚的每个 pair → 一行
+        anchor.pairs.forEach(p => {
+          const key = Core.normalizeCJK(p.zh);
+          const segIdx = state.segments.findIndex(sg => Core.normalizeCJK(sg.src) === key);
+          rowsArr.push({
+            zh: p.zh, key, segIdx,
+            para: segIdx >= 0 ? state.segments[segIdx].para : null,
+            cands: [{ model: anchor.name, text: p.en, score: 100, flags: [] }]
+          });
+        });
+        // 后续模型：对齐到锚
+        for (const set of rest) {
+          const anchorNorms = rowsArr.map(r => Core.normalizeCJK(r.zh));
+          const used = new Set();
           for (const p of set.pairs) {
             const norm = Core.normalizeCJK(p.zh);
-            if (!norm || exactMap.has(norm)) continue; // 已精确匹配
-            // 找最接近的已匹配 zh
-            let bestKey = null, bestScore = 0;
-            for (const zk of allZhKeys) {
-              const d = Core.diceCoefficient ? Core.diceCoefficient(norm, zk) : 0;
-              if (d > bestScore) { bestScore = d; bestKey = zk; }
+            if (!norm) continue;
+            // 1) 精确匹配
+            let bestIdx = anchorNorms.indexOf(norm);
+            if (bestIdx >= 0 && !used.has(bestIdx)) {
+              used.add(bestIdx);
+              rowsArr[bestIdx].cands.push({ model: set.name, text: p.en });
+              continue;
             }
-            if (bestKey && bestScore >= 0.5) {
-              const row = exactMap.get(bestKey);
-              if (!row.cands.some(c2 => c2.model === set.name)) {
-                row.cands.push({ model: set.name, text: p.en });
-                row.matchedBy[set.name] = 'fuzzy(' + Math.round(bestScore * 100) + '%)';
-              }
+            // 2) Dice 模糊匹配（≥0.45）
+            let best = -1, bestScore = 0;
+            for (let ai = 0; ai < anchorNorms.length; ai++) {
+              if (used.has(ai)) continue;
+              const d = Core.diceCoefficient(norm, anchorNorms[ai]);
+              if (d > bestScore) { bestScore = d; best = ai; }
             }
+            if (best >= 0 && bestScore >= 0.45) {
+              used.add(best);
+              rowsArr[best].cands.push({ model: set.name, text: p.en });
+            }
+            // 3) 匹配不到 → 忽略（该模型没有翻到这段）
           }
         }
-        const rowsArr = [...exactMap.values()].map(row => Object.assign(row, { cands: SR.rank(row.cands, row.zh, state.terms) }));
-        rowsArr.sort((a, b) => (a.para ?? 1e9) - (b.para ?? 1e9));
         mm = { models: parsedSets.map(ps => ps.name), rows: rowsArr, pos: 0 };
         $('#mmStatus').textContent = '对比完成：' + rowsArr.length + ' 句 × ' + models.length + ' 个模型。';
         $('#mmResults').hidden = false;
