@@ -1554,14 +1554,35 @@
       try {
         const parsedSets = [];
         for (const m of models) {
-          const rp = await revParsePairs(m.file);
-          const clean = rp.pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim())
-            .map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
-          parsedSets.push({ name: m.name, pairs: clean });
+          if (/\.docx$/i.test(m.file.name)) {
+            // docx：直接提取英文段落，按位置对齐到工作区句段
+            const buf = await m.file.arrayBuffer();
+            const parsed = await Office.docxToBlocks(buf);
+            // 如果有表格 → 按表格列提取
+            const tbl = parsed.tables.find(t2 => t2.rows.length >= 2 && t2.rows[0].length >= 2);
+            if (tbl) {
+              const sniff = Office.sniffDocxTable(tbl.rows);
+              if (sniff) {
+                const pairs = tbl.rows.slice(1).map(r => ({
+                  zh: String(r[sniff.srcCol] || ''), en: String(r[sniff.tgtCol] || '')
+                })).filter(p2 => p2.zh.trim());
+                parsedSets.push({ name: m.name, pairs, enOnly: false });
+                continue;
+              }
+            }
+            // 无表格 → 提取英文段落（过滤中文段落）
+            const enParas = parsed.paragraphs.filter(p2 => p2.trim() && !/[一-鿿]/.test(p2));
+            parsedSets.push({ name: m.name, pairs: enParas.map(p2 => ({ zh: '', en: p2.trim() })), enOnly: true });
+          } else {
+            const rp = await revParsePairs(m.file);
+            const clean = rp.pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim())
+              .map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
+            parsedSets.push({ name: m.name, pairs: clean, enOnly: rp.enOnly || false });
+          }
         }
         // 检查是否全部为纯英文模式（无中文匹配键，按位置对齐）
-        const allEnOnly = parsedSets.every(ps => ps.enOnly);
-        if (allEnOnly && state.segments.length > 0) {
+        const hasEnOnly = parsedSets.some(ps => ps.enOnly);
+        if (hasEnOnly && state.segments.length > 0) {
           const rowsArr = state.segments.map((sg, i) => ({
             zh: sg.src, key: Core.normalizeCJK(sg.src), segIdx: i,
             para: sg.para, cands: []
