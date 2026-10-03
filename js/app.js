@@ -1379,7 +1379,26 @@
               return { pairs, comments, meta: parsed.meta, note: 'docx 表格' };
             }
           }
-          return { pairs: parsed.paragraphs.filter(Boolean).map(p => ({ zh: p, en: '' })), comments: [], meta: parsed.meta, note: 'docx 段落（仅原文）' };
+          // 无表格 → 尝试段落模式
+          const nonEmpty = parsed.paragraphs.filter(p2 => p2.trim());
+          const hasCJK = nonEmpty.some(p2 => /[一-鿿]/.test(p2));
+          if (hasCJK) {
+            // 逐段交替（中文段 + 英文段交替出现）
+            const sniff = Office.sniffDocxParagraphs(parsed.paragraphs);
+            if (sniff && sniff.pairs.length) {
+              return { pairs: sniff.pairs.map(p2 => ({ zh: p2.zh, en: p2.en })), comments: [], meta: parsed.meta, note: 'docx 段落（' + sniff.mode + '）' };
+            }
+            // 纯英文提取（过滤掉中文段落，保留英文段）
+            const enOnly = nonEmpty.filter(p2 => !/[一-鿿]/.test(p2));
+            if (enOnly.length > 0 && enOnly.length < nonEmpty.length) {
+              return { pairs: enOnly.map(p2 => ({ zh: '', en: p2.trim() })), enOnly: true, comments: [], meta: parsed.meta, note: 'docx 纯英文段落' };
+            }
+          }
+          // 纯英文文件（无中文段落）——按位置对齐到工作区
+          if (nonEmpty.length > 0 && !nonEmpty.some(p2 => /[一-鿿]/.test(p2))) {
+            return { pairs: nonEmpty.map(p2 => ({ zh: '', en: p2.trim() })), enOnly: true, comments: [], meta: parsed.meta, note: 'docx 纯英文' };
+          }
+          return { pairs: nonEmpty.map(p2 => ({ zh: p2, en: '' })), comments: [], meta: parsed.meta, note: 'docx 段落（仅原文）' };
         }
         if (/\.xlsx$/i.test(f.name)) {
           const sheets = await Office.xlsxToSheets(await f.arrayBuffer());
@@ -1539,6 +1558,26 @@
           const clean = rp.pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim())
             .map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
           parsedSets.push({ name: m.name, pairs: clean });
+        }
+        // 检查是否全部为纯英文模式（无中文匹配键，按位置对齐）
+        const allEnOnly = parsedSets.every(ps => ps.enOnly);
+        if (allEnOnly && state.segments.length > 0) {
+          const rowsArr = state.segments.map((sg, i) => ({
+            zh: sg.src, key: Core.normalizeCJK(sg.src), segIdx: i,
+            para: sg.para, cands: []
+          }));
+          for (const set of parsedSets) {
+            for (let i = 0; i < Math.min(set.pairs.length, rowsArr.length); i++) {
+              const en = set.pairs[i].en;
+              if (en && en.trim()) rowsArr[i].cands.push({ model: set.name, text: en });
+            }
+          }
+          for (const row of rowsArr) row.cands = SR.rank(row.cands, row.zh, state.terms);
+          mm = { models: parsedSets.map(ps => ps.name), rows: rowsArr, pos: 0 };
+          $('#mmStatus').textContent = `对比完成（按位置对齐）：${rowsArr.length} 句 × ${models.length} 个模型。`;
+          $('#mmResults').hidden = false;
+          mmRenderCurrent();
+          return;
         }
         // 以第一个模型为锚（canonical 分句），后续模型对齐到锚
         const anchor = parsedSets[0];
