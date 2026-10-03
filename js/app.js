@@ -1379,26 +1379,7 @@
               return { pairs, comments, meta: parsed.meta, note: 'docx 表格' };
             }
           }
-          // 无表格 → 尝试段落模式
-          const nonEmpty = parsed.paragraphs.filter(p2 => p2.trim());
-          const hasCJK = nonEmpty.some(p2 => /[一-鿿]/.test(p2));
-          if (hasCJK) {
-            // 逐段交替（中文段 + 英文段交替出现）
-            const sniff = Office.sniffDocxParagraphs(parsed.paragraphs);
-            if (sniff && sniff.pairs.length) {
-              return { pairs: sniff.pairs.map(p2 => ({ zh: p2.zh, en: p2.en })), comments: [], meta: parsed.meta, note: 'docx 段落（' + sniff.mode + '）' };
-            }
-            // 纯英文提取（过滤掉中文段落，保留英文段）
-            const enOnly = nonEmpty.filter(p2 => !/[一-鿿]/.test(p2));
-            if (enOnly.length > 0 && enOnly.length < nonEmpty.length) {
-              return { pairs: enOnly.map(p2 => ({ zh: '', en: p2.trim() })), enOnly: true, comments: [], meta: parsed.meta, note: 'docx 纯英文段落' };
-            }
-          }
-          // 纯英文文件（无中文段落）——按位置对齐到工作区
-          if (nonEmpty.length > 0 && !nonEmpty.some(p2 => /[一-鿿]/.test(p2))) {
-            return { pairs: nonEmpty.map(p2 => ({ zh: '', en: p2.trim() })), enOnly: true, comments: [], meta: parsed.meta, note: 'docx 纯英文' };
-          }
-          return { pairs: nonEmpty.map(p2 => ({ zh: p2, en: '' })), comments: [], meta: parsed.meta, note: 'docx 段落（仅原文）' };
+          return { pairs: parsed.paragraphs.filter(Boolean).map(p => ({ zh: p, en: '' })), comments: [], meta: parsed.meta, note: 'docx 段落（仅原文）' };
         }
         if (/\.xlsx$/i.test(f.name)) {
           const sheets = await Office.xlsxToSheets(await f.arrayBuffer());
@@ -1549,101 +1530,77 @@
         const name = (document.getElementById('mmName' + k).value || '').trim() || ('模型 ' + k);
         models.push({ name, file: f });
       }
-      if (models.length < 2) { $('#mmStatus').textContent = '请至少提供 2 个模型的译文文件。'; return; }
+      if (models.length < 2) { $('#mmStatus').textContent = '请至少提供 2 个模型译文文件（.docx/.tmx/.xlsx/.csv 均可）。'; return; }
       $('#mmStatus').textContent = '解析中…';
       try {
+        // 统一解析：每个模型 → { enList: [英文段], zhList: [中文段或 null] }
         const parsedSets = [];
         for (const m of models) {
           if (/\.docx$/i.test(m.file.name)) {
-            // docx：直接提取英文段落，按位置对齐到工作区句段
-            const buf = await m.file.arrayBuffer();
-            const parsed = await Office.docxToBlocks(buf);
-            // 如果有表格 → 按表格列提取
+            const parsed = await Office.docxToBlocks(await m.file.arrayBuffer());
             const tbl = parsed.tables.find(t2 => t2.rows.length >= 2 && t2.rows[0].length >= 2);
             if (tbl) {
               const sniff = Office.sniffDocxTable(tbl.rows);
               if (sniff) {
-                const pairs = tbl.rows.slice(1).map(r => ({
-                  zh: String(r[sniff.srcCol] || ''), en: String(r[sniff.tgtCol] || '')
-                })).filter(p2 => p2.zh.trim());
-                parsedSets.push({ name: m.name, pairs, enOnly: false });
+                const zhList = [], enList = [];
+                tbl.rows.slice(1).forEach(r => {
+                  const zh = String(r[sniff.srcCol] || '').trim(), en = String(r[sniff.tgtCol] || '').trim();
+                  if (zh) zhList.push(zh); if (en) enList.push(en);
+                });
+                parsedSets.push({ name: m.name, zhList, enList, hasZh: true });
                 continue;
               }
             }
-            // 无表格 → 提取英文段落（过滤中文段落）
-            const enParas = parsed.paragraphs.filter(p2 => p2.trim() && !/[一-鿿]/.test(p2));
-            parsedSets.push({ name: m.name, pairs: enParas.map(p2 => ({ zh: '', en: p2.trim() })), enOnly: true });
+            const enParas = parsed.paragraphs.filter(p2 => p2.trim() && !/[\u4e00-\u9fff]/.test(p2));
+            const zhParas = parsed.paragraphs.filter(p2 => p2.trim() && /[\u4e00-\u9fff]/.test(p2));
+            parsedSets.push({ name: m.name, enList: enParas, zhList: zhParas.length > 2 ? zhParas : null, hasZh: zhParas.length > 2 });
           } else {
-            const rp = await revParsePairs(m.file);
-            const clean = rp.pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim())
-              .map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
-            parsedSets.push({ name: m.name, pairs: clean, enOnly: rp.enOnly || false });
-          }
-        }
-        // 检查是否全部为纯英文模式（无中文匹配键，按位置对齐）
-        const hasEnOnly = parsedSets.some(ps => ps.enOnly);
-        if (hasEnOnly && state.segments.length > 0) {
-          const rowsArr = state.segments.map((sg, i) => ({
-            zh: sg.src, key: Core.normalizeCJK(sg.src), segIdx: i,
-            para: sg.para, cands: []
-          }));
-          for (const set of parsedSets) {
-            for (let i = 0; i < Math.min(set.pairs.length, rowsArr.length); i++) {
-              const en = set.pairs[i].en;
-              if (en && en.trim()) rowsArr[i].cands.push({ model: set.name, text: en });
+            const { pairs } = await revParsePairs(m.file);
+            const enList = [], zhList = [];
+            for (const p of pairs) {
+              const z = (p.zh || '').trim(), e = (p.en || '').trim();
+              if (z) zhList.push(z); if (e) enList.push(e);
             }
+            parsedSets.push({ name: m.name, enList, zhList: zhList.length > 0 ? zhList : null, hasZh: zhList.length > 0 });
           }
-          for (const row of rowsArr) row.cands = SR.rank(row.cands, row.zh, state.terms);
-          mm = { models: parsedSets.map(ps => ps.name), rows: rowsArr, pos: 0 };
-          $('#mmStatus').textContent = `对比完成（按位置对齐）：${rowsArr.length} 句 × ${models.length} 个模型。`;
-          $('#mmResults').hidden = false;
-          mmRenderCurrent();
-          return;
         }
-        // 以第一个模型为锚（canonical 分句），后续模型对齐到锚
-        const anchor = parsedSets[0];
-        const rest = parsedSets.slice(1);
-        const rowsArr = [];
-        // 锚的每个 pair → 一行
-        anchor.pairs.forEach(p => {
-          const key = Core.normalizeCJK(p.zh);
-          const segIdx = state.segments.findIndex(sg => Core.normalizeCJK(sg.src) === key);
-          rowsArr.push({
-            zh: p.zh, key, segIdx,
-            para: segIdx >= 0 ? state.segments[segIdx].para : null,
-            cands: [{ model: anchor.name, text: p.en, score: 100, flags: [] }]
-          });
+        // 对齐：每个模型独立对齐到工作区中文句段
+        // 策略：有 zhList → zh 匹配（精确→Dice）；无 zhList → 按位置
+        const segNorms = state.segments.map(sg => Core.normalizeCJK(sg.src));
+        const modelMaps = parsedSets.map(set => {
+          const mapping = new Map(); // segIdx → en text
+          if (set.hasZh && set.zhList) {
+            // zh 匹配：精确 → Dice ≥ 0.4
+            const zhNorms = set.zhList.map(z2 => Core.normalizeCJK(z2));
+            const used = new Set();
+            // 精确
+            zhNorms.forEach((zn, zi) => {
+              const idx = segNorms.indexOf(zn);
+              if (idx >= 0 && !used.has(idx)) { used.add(idx); mapping.set(idx, set.enList[zi] || ''); }
+            });
+            // Dice 模糊
+            zhNorms.forEach((zn, zi) => {
+              if (used.has(zi)) return;
+              let best = -1, bestScore = 0;
+              segNorms.forEach((sn, si) => { if (!used.has(si)) { const d = Core.diceCoefficient(zn, sn); if (d > bestScore) { bestScore = d; best = si; } } });
+              if (best >= 0 && bestScore >= 0.4) { used.add(best); mapping.set(best, set.enList[zi] || ''); }
+            });
+          } else {
+            // 纯英文：按位置对齐
+            set.enList.forEach((en, i) => { if (i < state.segments.length) mapping.set(i, en); });
+          }
+          return { name: set.name, mapping, count: mapping.size };
         });
-        // 后续模型：对齐到锚
-        for (const set of rest) {
-          const anchorNorms = rowsArr.map(r => Core.normalizeCJK(r.zh));
-          const used = new Set();
-          for (const p of set.pairs) {
-            const norm = Core.normalizeCJK(p.zh);
-            if (!norm) continue;
-            // 1) 精确匹配
-            let bestIdx = anchorNorms.indexOf(norm);
-            if (bestIdx >= 0 && !used.has(bestIdx)) {
-              used.add(bestIdx);
-              rowsArr[bestIdx].cands.push({ model: set.name, text: p.en });
-              continue;
-            }
-            // 2) Dice 模糊匹配（≥0.45）
-            let best = -1, bestScore = 0;
-            for (let ai = 0; ai < anchorNorms.length; ai++) {
-              if (used.has(ai)) continue;
-              const d = Core.diceCoefficient(norm, anchorNorms[ai]);
-              if (d > bestScore) { bestScore = d; best = ai; }
-            }
-            if (best >= 0 && bestScore >= 0.45) {
-              used.add(best);
-              rowsArr[best].cands.push({ model: set.name, text: p.en });
-            }
-            // 3) 匹配不到 → 忽略（该模型没有翻到这段）
-          }
-        }
-        mm = { models: parsedSets.map(ps => ps.name), rows: rowsArr, pos: 0 };
-        $('#mmStatus').textContent = '对比完成：' + rowsArr.length + ' 句 × ' + models.length + ' 个模型。';
+        // 构建行
+        const finalRows = state.segments.map((sg, i) => {
+          const cands = modelMaps.filter(m2 => m2.mapping.has(i))
+            .map(m2 => ({ model: m2.name, text: m2.mapping.get(i) }));
+          const ranked = cands.length ? SR.rank(cands, sg.src, state.terms) : [];
+          return { zh: sg.src, segIdx: i, para: sg.para, cands: ranked, bestScore: ranked[0] ? ranked[0].score : 0 };
+        });
+        mm = { models: modelMaps.map(m2 => m2.name), rows: finalRows, pos: 0 };
+        const totalMapped = modelMaps.reduce((a, m2) => a + m2.count, 0);
+        $('#mmStatus').textContent = `对比完成：${finalRows.length} 句 × ${models.length} 个模型（共 ${totalMapped} 条译文）。`;
         $('#mmResults').hidden = false;
         mmRenderCurrent();
       } catch (err) { $('#mmStatus').textContent = '解析失败：' + (err.message || err); }
