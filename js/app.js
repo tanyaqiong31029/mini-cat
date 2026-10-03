@@ -1539,20 +1539,45 @@
           const clean = pairs.filter(p2 => p2.zh && p2.zh.trim() && p2.en && p2.en.trim()).map(p2 => ({ zh: p2.zh.trim(), en: p2.en.trim() }));
           parsedSets.push({ name: m.name, pairs: clean });
         }
-        const rowsMap = new Map();
+        // 第一轮：精确匹配（normalizeCJK 相等）
+        const exactMap = new Map();
         for (const set of parsedSets) {
           for (const p of set.pairs) {
             const key = Core.normalizeCJK(p.zh);
             if (!key) continue;
-            if (!rowsMap.has(key)) {
+            if (!exactMap.has(key)) {
               const segIdx = state.segments.findIndex(sg => Core.normalizeCJK(sg.src) === key);
-              rowsMap.set(key, { zh: p.zh, key, segIdx, para: segIdx >= 0 ? state.segments[segIdx].para : null, cands: [] });
+              exactMap.set(key, { zh: p.zh, key, segIdx, para: segIdx >= 0 ? state.segments[segIdx].para : null, cands: [], matchedBy: {} });
             }
-            const row = rowsMap.get(key);
-            if (!row.cands.some(c2 => c2.model === set.name)) row.cands.push({ model: set.name, text: p.en });
+            const row = exactMap.get(key);
+            if (!row.cands.some(c2 => c2.model === set.name)) {
+              row.cands.push({ model: set.name, text: p.en });
+              row.matchedBy[set.name] = 'exact';
+            }
           }
         }
-        const rowsArr = [...rowsMap.values()].map(row => Object.assign(row, { cands: SR.rank(row.cands, row.zh, state.terms) }));
+        // 第二轮：模糊匹配（Dice ≥ 0.6）——把精确匹配不到的句对归入最接近的已匹配行
+        const allZhKeys = [...exactMap.keys()];
+        for (const set of parsedSets) {
+          for (const p of set.pairs) {
+            const norm = Core.normalizeCJK(p.zh);
+            if (!norm || exactMap.has(norm)) continue; // 已精确匹配
+            // 找最接近的已匹配 zh
+            let bestKey = null, bestScore = 0;
+            for (const zk of allZhKeys) {
+              const d = Core.diceCoefficient ? Core.diceCoefficient(norm, zk) : 0;
+              if (d > bestScore) { bestScore = d; bestKey = zk; }
+            }
+            if (bestKey && bestScore >= 0.5) {
+              const row = exactMap.get(bestKey);
+              if (!row.cands.some(c2 => c2.model === set.name)) {
+                row.cands.push({ model: set.name, text: p.en });
+                row.matchedBy[set.name] = 'fuzzy(' + Math.round(bestScore * 100) + '%)';
+              }
+            }
+          }
+        }
+        const rowsArr = [...exactMap.values()].map(row => Object.assign(row, { cands: SR.rank(row.cands, row.zh, state.terms) }));
         rowsArr.sort((a, b) => (a.para ?? 1e9) - (b.para ?? 1e9));
         mm = { models: parsedSets.map(ps => ps.name), rows: rowsArr, pos: 0 };
         $('#mmStatus').textContent = '对比完成：' + rowsArr.length + ' 句 × ' + models.length + ' 个模型。';
