@@ -358,6 +358,16 @@
       const n = Math.min(zh.length, en.length);
       return { mode: 'zh_then_en', pairs: zh.slice(0, n).map((s, k) => ({ src: s, tgt: en[k] })), mismatch: Math.abs(zh.length - en.length) };
     }
+    // 回退：按语言分组配对——所有中文段按顺序，所有英文段按顺序，第 n 个中文配第 n 个英文
+    const zhGrp = ps.filter((_, fi) => flags[fi]);
+    const enGrp = ps.filter((_, fi) => !flags[fi]);
+    const nP = Math.min(zhGrp.length, enGrp.length);
+    if (nP > 0 && zhGrp.length > 2) {
+      return {
+        mode: 'grouped',
+        pairs: zhGrp.slice(0, nP).map((z, k) => ({ src: z, tgt: enGrp[k] }))
+      };
+    }
     return null;
   }
 
