@@ -55,6 +55,7 @@ ok(hitsT[2].term.zh === '釉' && hitsT[2].start === 12, `single char term hit (s
 
 /* --- TMX round trip (io.js needs DOMParser — test build only for escaping here) --- */
 ok(Core.escapeHtml('<b>&"') === '&lt;b&gt;&amp;&quot;', 'escapeHtml');
+ok(Core.escapeHtml(0) === '0' && Core.escapeHtml(null) === '' && Core.escapeHtml(undefined) === '', 'escapeHtml keeps 0, blanks null/undefined');
 
 /* --- CSV parsing (io.js, pure functions) --- */
 const IO = require('../js/io.js');

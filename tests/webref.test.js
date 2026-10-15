@@ -25,6 +25,10 @@ ok(ranked[0].title === '尾崎洵盛' && ranked[0].exact === true, 'rankHits: ex
 ok(ranked[1].exact === false, 'rankHits: partial-name hit marked related');
 ok(links.some(l => l.url.includes('site%3Adigicol.dpm.org.cn')), 'museum site-search link uses Bing site: operator');
 
+ok(Web.safeHttpUrl('https://www.metmuseum.org/art/1') === 'https://www.metmuseum.org/art/1', 'safeHttpUrl keeps https');
+ok(Web.safeHttpUrl('javascript:alert(1)', 'https://fallback/') === 'https://fallback/', 'safeHttpUrl rejects javascript:');
+ok(Web.safeHttpUrl('data:text/html,x', '') === '', 'safeHttpUrl rejects data:');
+ok(Web.safeHttpUrl('/relative', 'f') === 'f', 'safeHttpUrl rejects relative');
 ok(Web.stripHtml('<span class="searchmatch">青釉</span> 与 <b>胎</b>') === '青釉 与 胎', 'stripHtml removes tags');
 
 console.log(`\n${pass} passed, ${fail} failed`);

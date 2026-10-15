@@ -1,5 +1,6 @@
 /* Mini-CAT file I/O: TMX 1.4, TBX-Basic, CSV/TSV, JSONL, paste-pairs, backups.
- * Zero dependencies: XML via DOMParser, CSV hand-rolled, XLSX not supported (save as CSV from Excel). */
+ * Zero dependencies: XML via DOMParser, CSV hand-rolled. XLSX/DOCX are read via msoffice.js + zip.js
+ * (rows from those are mapped with mapBilingualHeader below). */
 (function (root) {
   'use strict';
   const Core = (typeof module !== 'undefined' && module.exports)
@@ -73,16 +74,30 @@
   }
 
   /* Header-driven auto-mapping for bilingual tables (also used for xlsx/docx rows).
-   * Returns {src,tgt,note,id} column indices (−1 = absent). */
+   * Returns {src,tgt,note,id} column indices (−1 = absent).
+   * Latin keywords match whole tokens only ('en' must not hit "Segment"/"Content");
+   * CJK keywords match as substrings ('中文' hits '中文术语'). Keywords are tried in
+   * priority order and a column already chosen for one role is never reused. */
   function mapBilingualHeader(header) {
     const norm = header.map(h => String(h || '').trim().toLowerCase());
-    const find = (res) => norm.findIndex(h => res.some(r => h.includes(r)));
-    return {
-      src: find(['中文', '原文', 'zh', 'source', 'src']),
-      tgt: find(['英文', '译文', '目标', 'en', 'english', 'target', 'tgt', '最终译法', '译法']),
-      note: find(['备注', '说明', '定义', '语境', 'note', 'definition', '出处', '决策']),
-      id: find(['id', '编号', '术语id'])
+    const tokens = norm.map(h => h.match(/[a-z0-9]+/g) || []);
+    const used = new Set();
+    const hit = (i, kw) => /^[a-z0-9 ]+$/.test(kw)
+      ? (kw.includes(' ') ? (' ' + tokens[i].join(' ') + ' ').includes(' ' + kw + ' ') : tokens[i].includes(kw))
+      : norm[i].includes(kw);
+    const pick = (keywords) => {
+      for (const kw of keywords) {
+        for (let i = 0; i < norm.length; i++) {
+          if (!used.has(i) && hit(i, kw)) { used.add(i); return i; }
+        }
+      }
+      return -1;
     };
+    const id = pick(['术语id', '编号', 'id']);
+    const src = pick(['中文', '原文', 'source', 'src', 'zh']);
+    const tgt = pick(['英文', '译文', '目标', '最终译法', '译法', 'english', 'target', 'tgt', 'en']);
+    const note = pick(['备注', '说明', '定义', '语境', 'note', 'notes', 'definition', '出处', '决策']);
+    return { src, tgt, note, id };
   }
 
   function sniffBilingualTable(text, delim) {
@@ -111,7 +126,13 @@
       tuvs.forEach(tuv => {
         const lang = (tuv.getAttribute('xml:lang') || '').toLowerCase();
         const seg = tuv.querySelector('seg');
-        const content = seg ? seg.textContent.trim() : '';
+        let content = '';
+        if (seg) {
+          // 去掉内联标记元素（bpt/ept/it/ph 的内容是原格式代码，不是译文文本）；<hi>/<sub> 等保留文字
+          const clone = seg.cloneNode(true);
+          clone.querySelectorAll('bpt, ept, it, ph').forEach(el => el.remove());
+          content = clone.textContent.trim();
+        }
         segs.push({ lang, content });
       });
       // zh → src, en → tgt (fall back to header srclang order)

@@ -11,6 +11,15 @@
     return String(s || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
+  /* 外部 API 返回的链接只在是 http(s) 绝对地址时使用（防 javascript:/data: 等注入 href），否则用 fallback */
+  function safeHttpUrl(u, fallback) {
+    try {
+      const parsed = new URL(String(u || ''));
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
+    } catch (e) { /* invalid → fallback */ }
+    return fallback === undefined ? '' : fallback;
+  }
+
   /* fetch with timeout; returns parsed JSON or throws */
   async function fetchJson(url, timeoutMs) {
     const ctrl = new AbortController();
@@ -69,7 +78,7 @@
     for (const id of ids) {
       if (out.length >= (limit || 4)) break;
       try {
-        const o = await fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`, 9000);
+        const o = await fetchJson(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${encodeURIComponent(id)}`, 9000);
         if (!o.title) continue;
         out.push({
           title: o.title,
@@ -77,7 +86,7 @@
           date: o.objectDate || '',
           culture: o.culture || '',
           medium: o.medium || '',
-          url: o.objectURL || `https://www.metmuseum.org/art/collection/search/${id}`
+          url: safeHttpUrl(o.objectURL, `https://www.metmuseum.org/art/collection/search/${encodeURIComponent(id)}`)
         });
       } catch (e) { /* skip object */ }
     }
@@ -97,7 +106,7 @@
         title: d.title || d.identifier,
         year: d.year || '',
         creator: Array.isArray(d.creator) ? d.creator.join('; ') : (d.creator || ''),
-        url: `https://archive.org/details/${d.identifier}`
+        url: `https://archive.org/details/${encodeURIComponent(String(d.identifier || ''))}`
       }))
     };
   }
@@ -143,5 +152,5 @@
     return { results, links: buildLinks(zhTerm, enTerm) };
   }
 
-  return { stripHtml, fetchJson, wikipedia, metMuseum, archiveBooks, buildLinks, lookupAll, rankHits };
+  return { stripHtml, safeHttpUrl, fetchJson, wikipedia, metMuseum, archiveBooks, buildLinks, lookupAll, rankHits };
 });

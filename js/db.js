@@ -149,7 +149,10 @@
             result = { ok: false, conflict: true, currentRev: curRev, segments: (cur && cur.segments) || [], updated: (cur && cur.updated) || '' };
             return; // 不写入：事务提交但数据库未变
           }
-          const rec = Object.assign({}, data, { name, rev: curRev + 1 });
+          // 合并已有记录：保留 created 等未随本次保存提交的字段；data 中值为 undefined 的键不覆盖旧值
+          const rec = Object.assign({}, cur || {});
+          for (const k of Object.keys(data || {})) if (data[k] !== undefined) rec[k] = data[k];
+          rec.name = name; rec.rev = curRev + 1;
           s.put(rec);
           result = { ok: true, newRev: curRev + 1 };
         };

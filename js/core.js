@@ -289,7 +289,7 @@
   function cjkCount(s) { const m = String(s || '').match(/[\u4e00-\u9fff\u3400-\u4dbf]/g); return m ? m.length : 0; }
 
   function escapeHtml(s) {
-    return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   return {

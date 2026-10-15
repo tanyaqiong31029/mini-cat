@@ -38,6 +38,14 @@ function ok(cond, name) {
   const final = await DB.Projects.get('项目P');
   ok(final.segments[0].src === 'A3' && final.rev === 3, 'final state consistent');
 
+  // 首次保存不得丢失项目创建日期（合并已有记录，而非整条替换）
+  await DB.Projects.put({ name: '项目C', created: '2026-01-02' });
+  const c1 = await DB.Projects.saveWithRev('项目C', 0, { segments: [{ src: 'x' }], updated: 'u1' });
+  const c1rec = await DB.Projects.get('项目C');
+  ok(c1.ok && c1rec.created === '2026-01-02' && c1rec.segments[0].src === 'x', `created preserved on first save (got ${JSON.stringify(c1rec)})`);
+  await DB.Projects.saveWithRev('项目C', null, { created: undefined, segments: [], updated: 'u2' });
+  ok((await DB.Projects.get('项目C')).created === '2026-01-02', 'undefined field does not clobber existing value');
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });
