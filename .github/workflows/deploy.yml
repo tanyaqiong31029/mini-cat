@@ -22,8 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # 只发布站点运行所需文件（index.html 及其加载的 css/、js/，外加示例数据 sample/），
+      # 不把 tests/、scripts/、docs/、.github/ 等仓库内容上线
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp -r index.html css js sample _site/
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: '_site'
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -272,6 +272,60 @@ const { chromium } = require('@playwright/test');
     console.log('PASS paired split/merge, formatting and history preservation, reload, undo and protection of later edits; TM unchanged');
     assert.deepEqual(pageErrors, []);
     console.log('PASS ambiguous repeated paragraph is blocked; no browser errors');
+
+    // 多标签页：打开第二页不写库；冲突后暂停保存，直到用户选择强制覆盖
+    {
+      const ctx = await browser.newContext();
+      const url = 'http://127.0.0.1:' + server.address().port;
+      const errs = [];
+      const open = async () => {
+        const p = await ctx.newPage(); p.setDefaultTimeout(10000);
+        p.on('pageerror', e => errs.push(e.message));
+        await p.goto(url);
+        await p.waitForFunction(() => document.querySelector('#log').textContent.includes('就绪'), { polling: 100 });
+        return p;
+      };
+      const rec = p => p.evaluate(() => MiniCatDB.Projects.get(document.querySelector('#projSelect').value));
+      const waitRev = async (p, rev) => {
+        for (let i = 0; i < 100; i++) { if ((await rec(p)).rev === rev) return; await new Promise(r => setTimeout(r, 50)); }
+        throw new Error('rev never reached ' + rev + ' (now ' + (await rec(p)).rev + ')');
+      };
+      const settle = () => new Promise(r => setTimeout(r, 1200)); // > 600ms 自动保存防抖
+      const A = await open();
+      await A.locator('#btnImportSource').click();
+      await A.locator('#srcPaste').fill('第一段内容。\n第二段内容。');
+      await A.locator('#srcSegMode').selectOption('paragraph');
+      await A.locator('#btnSourceLoad').click();
+      await A.waitForFunction(() => document.querySelectorAll('.seg-tgt').length === 2);
+      await settle();
+      const base = await rec(A);
+      assert.ok(base.created, 'project created date survives saves');
+      const B = await open();
+      await settle();
+      assert.equal((await rec(B)).rev, base.rev, 'opening a second tab must not write');
+      await B.locator('.seg-tgt').first().fill('from B');
+      await waitRev(B, base.rev + 1);
+      await A.locator('.seg-tgt').first().fill('from A 1');
+      await A.waitForFunction(() => document.querySelector('#conflictBanner').style.display !== 'none');
+      await A.locator('.seg-tgt').nth(1).fill('from A 2');
+      await settle();
+      let r = await rec(A);
+      assert.equal(r.rev, base.rev + 1, 'no save while conflict is pending');
+      assert.equal(r.segments[0].tgt, 'from B', 'other tab content not overwritten');
+      await A.locator('#btnConflictForce').click();
+      await waitRev(A, base.rev + 2);
+      r = await rec(A);
+      assert.equal(r.segments[0].tgt, 'from A 1');
+      assert.equal(r.segments[1].tgt, 'from A 2', 'force keeps edits made while paused');
+      assert.equal(r.created, base.created, 'created survives forced save');
+      assert.equal(await A.locator('#conflictBanner').isVisible(), false);
+      await A.locator('.seg-tgt').first().fill('from A 3');
+      await waitRev(A, base.rev + 3);
+      assert.equal(await A.locator('#conflictBanner').isVisible(), false);
+      assert.deepEqual(errs, []);
+      await ctx.close();
+      console.log('PASS second tab does not write; conflict pauses autosave until forced; created preserved');
+    }
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

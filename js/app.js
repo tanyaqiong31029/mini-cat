@@ -77,6 +77,11 @@
     state.segments = proj.segments || [];
     state.rev = typeof proj.rev === 'number' ? proj.rev : 0;
     projectedRev = state.rev;
+    if (state.pendingConflict && state.pendingConflict.name !== state.project) {
+      // 已切换到其他项目：旧项目的冲突提示不再适用
+      state.pendingConflict = null;
+      const cb = $('#conflictBanner'); if (cb) cb.style.display = 'none';
+    }
     await renderTerms();
     renderSegments();
     renderStats();
@@ -94,6 +99,8 @@
 
   async function rematchAll() {
     if (!state.segments.length) { renderSegments(); renderStats(); return; }
+    // 仅当重新匹配确实改变了句段时才保存：单纯打开第二个标签页不应写库（否则会让第一个标签页误报冲突）
+    const before = JSON.stringify(state.segments);
     setBusy(true, '正在匹配记忆库…');
     const CHUNK = 25;
     for (let i = 0; i < state.segments.length; i += CHUNK) {
@@ -111,7 +118,7 @@
       setBusy(true, `正在匹配记忆库… ${Math.min(i + CHUNK, state.segments.length)}/${state.segments.length}`);
     }
     setBusy(false);
-    saveProjectDebounced();
+    if (JSON.stringify(state.segments) !== before) saveProjectDebounced();
   }
 
   function matchSegment(seg, prevNorm) {
@@ -230,7 +237,12 @@
     try { return await action(); }
     finally { document.body.inert = --workspaceLocks > 0; }
   }
+  // 版本冲突待用户决定（重新加载 / 强制覆盖）期间，暂停一切自动保存
+  function saveBlockedByConflict() {
+    return !!(state.pendingConflict && state.pendingConflict.name === state.project);
+  }
   function saveProjectDebounced() {
+    if (saveBlockedByConflict()) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => saveProjectNow().catch(() => log('保存失败，请备份并重试。')), 600);
   }
@@ -238,6 +250,7 @@
     clearTimeout(saveTimer);
     saveTimer = null;
     if (!state.project) return saveQueue;
+    if (saveBlockedByConflict()) return saveQueue;
     // Capture before awaiting: a later project switch/edit must not change this write.
     const name = state.project;
     const segments = structuredClone(state.segments);
@@ -245,16 +258,19 @@
     const expectedRev = projectedRev;
     projectedRev = expectedRev + 1; // 乐观推进：saveQueue 串行，同页下一次保存的期望值随之 +1；写入失败或冲突时回滚为 DB 真实值
     const pending = saveQueue.catch(() => {}).then(async () => {
+      // 排在冲突之后的保存：同一项目已进入冲突待决状态，不得写入（否则会用推进后的期望版本覆盖对方）
+      if (state.pendingConflict && state.pendingConflict.name === name) return;
       let r;
       try {
-        r = await DB.Projects.saveWithRev(name, expectedRev, { created: undefined, segments, updated });
+        r = await DB.Projects.saveWithRev(name, expectedRev, { segments, updated });
       } catch (err) {
         projectedRev = expectedRev; // 写入未落地（如存储失败注入）：投影回滚，允许紧接的回退保存
         throw err;
       }
       if (r.ok) { state.rev = r.newRev; return; }
       // 版本冲突：另一标签页已保存过。绝不静默覆盖——展示冲突横幅等待用户选择。
-      projectedRev = r.currentRev; state.rev = r.currentRev;
+      // projectedRev 不跟进对方的 currentRev：直到用户选择“重新加载”或“强制覆盖”前都不再保存。
+      projectedRev = expectedRev;
       state.pendingConflict = { name, segments, updated, currentRev: r.currentRev, otherCount: r.segments.length };
       showConflictBanner();
     });
@@ -916,8 +932,12 @@
     $('#btnConflictForce').onclick = async () => {
       const pc = state.pendingConflict;
       if (!pc) return;
-      const r = await DB.Projects.saveWithRev(pc.name, null, { segments: pc.segments, updated: new Date().toISOString() });
-      if (r && r.ok) { state.rev = r.newRev; projectedRev = r.newRev; state.pendingConflict = null; $('#conflictBanner').style.display = 'none'; log('已按你的选择强制覆盖其他标签页的内容。'); }
+      // 强制覆盖写入本页当前内容（冲突暂停期间的编辑也一并保留）
+      const segments = pc.name === state.project ? structuredClone(state.segments) : pc.segments;
+      clearTimeout(saveTimer); saveTimer = null;
+      await saveQueue.catch(() => {});
+      const r = await DB.Projects.saveWithRev(pc.name, null, { segments, updated: new Date().toISOString() });
+      if (r && r.ok) { if (pc.name === state.project) { state.rev = r.newRev; projectedRev = r.newRev; } state.pendingConflict = null; $('#conflictBanner').style.display = 'none'; log('已按你的选择强制覆盖其他标签页的内容。'); }
     };
     $('#btnTabLockDismiss').onclick = () => { const b = $('#tabLockBanner'); if (b) b.style.display = 'none'; };
     window.addEventListener('pagehide', () => { if (releaseProjectLock) { const f = releaseProjectLock; releaseProjectLock = null; f(); } });
